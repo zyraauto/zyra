@@ -1,0 +1,97 @@
+{
+  "nav": {
+    "workshops": "Talleres",
+    "services": "Servicios",
+    "quoter": "Cotizar",
+    "dashboard": "Panel",
+    "signOut": "Cerrar sesión",
+    "login": "Iniciar sesión",
+    "register": "Registrarse"
+  },
+  "auth": {
+    "login": {
+      "title": "Bienvenido de vuelta",
+      "subtitle": "Inicia sesión en tu cuenta de AutoService Pro",
+      "email": "Correo electrónico",
+      "password": "Contraseña",
+      "forgotPassword": "¿Olvidaste tu contraseña?",
+      "submit": "Iniciar sesión",
+      "loading": "Iniciando sesión…",
+      "noAccount": "¿No tienes cuenta?",
+      "signUp": "Regístrate",
+      "orContinueWith": "O continúa con"
+    },
+    "register": {
+      "title": "Crea tu cuenta",
+      "subtitle": "Únete a AutoService Pro hoy",
+      "fullName": "Nombre completo",
+      "email": "Correo electrónico",
+      "password": "Contraseña",
+      "confirmPassword": "Confirmar contraseña",
+      "submit": "Crear cuenta",
+      "loading": "Creando cuenta…",
+      "hasAccount": "¿Ya tienes cuenta?",
+      "signIn": "Inicia sesión"
+    }
+  },
+  "dashboard": {
+    "welcome": "Panel",
+    "subtitle": "¡Bienvenido de vuelta! Aquí tienes un resumen de tu actividad.",
+    "upcoming": "Próximas",
+    "completed": "Completadas",
+    "garage": "Autos en garaje",
+    "upcomingAppointments": "Próximas citas",
+    "viewAll": "Ver todas",
+    "bookService": "Agendar servicio",
+    "noUpcoming": "No tienes citas próximas.",
+    "activePromotions": "Promociones activas",
+    "noPromotions": "No hay promociones activas en este momento."
+  },
+  "appointments": {
+    "title": "Mis Citas",
+    "subtitle": "Administra y rastrea tu historial de servicios.",
+    "book": "Agendar servicio",
+    "upcoming": "Próximas",
+    "completed": "Completadas",
+    "cancelled": "Canceladas",
+    "noAppointments": "No hay citas en esta categoría.",
+    "status": {
+      "pending": "Pendiente",
+      "confirmed": "Confirmada",
+      "in_progress": "En proceso",
+      "completed": "Completada",
+      "cancelled": "Cancelada"
+    }
+  },
+  "garage": {
+    "title": "Mi Garaje",
+    "subtitle": "Administra tus vehículos.",
+    "addCar": "Agregar auto",
+    "noCars": "No tienes autos en tu garaje",
+    "noCarsSubtitle": "Agrega tu primer auto para comenzar.",
+    "addFirst": "Agregar mi primer auto"
+  },
+  "points": {
+    "title": "Mis Puntos",
+    "subtitle": "Gana puntos en cada servicio y canjéalos por descuentos.",
+    "balance": "Saldo actual",
+    "unit": "puntos de lealtad",
+    "howToEarn": "Cómo ganar puntos",
+    "history": "Historial de puntos",
+    "noHistory": "Sin actividad todavía. ¡Completa un servicio para ganar tus primeros puntos!"
+  },
+  "common": {
+    "loading": "Cargando…",
+    "error": "Algo salió mal.",
+    "retry": "Intentar de nuevo",
+    "back": "Volver",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "view": "Ver",
+    "close": "Cerrar",
+    "confirm": "Confirmar",
+    "optional": "opcional"
+  }
+}

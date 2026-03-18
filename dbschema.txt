@@ -1,0 +1,367 @@
+-- =============================================
+-- AUTOSERVICE PRO — Schema completo con RLS
+-- =============================================
+
+-- 1. EXTENSIÓN UUID
+create extension if not exists "uuid-ossp";
+
+-- =============================================
+-- TABLA: profiles (extiende auth.users)
+-- =============================================
+create table public.profiles (
+  id uuid references auth.users(id) on delete cascade primary key,
+  role text not null default 'client'
+    check (role in ('super_admin','workshop_admin','mechanic','client','visitor','supplier')),
+  full_name text,
+  phone text,
+  avatar_url text,
+  loyalty_points int not null default 0,
+  notifications_enabled boolean default true,
+  created_at timestamptz default now()
+);
+
+-- RLS
+alter table public.profiles enable row level security;
+
+-- Cada usuario ve solo su perfil
+create policy "perfil propio" on public.profiles
+  for select using (auth.uid() = id);
+
+-- Cada usuario edita solo su perfil
+create policy "editar perfil propio" on public.profiles
+  for update using (auth.uid() = id);
+
+-- Super admin ve todos
+create policy "super_admin todo" on public.profiles
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );
+
+-- Auto-crear perfil al registrarse
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer as $$
+begin
+  insert into public.profiles (id, full_name)
+  values (new.id, new.raw_user_meta_data->>'full_name');
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- =============================================
+-- TABLA: workshops
+-- =============================================
+create table public.workshops (
+  id uuid default uuid_generate_v4() primary key,
+  name text not null,
+  slug text unique not null,
+  owner_id uuid references public.profiles(id),
+  address text,
+  lat float,
+  lng float,
+  city text,
+  phone_wa text,
+  logo_url text,
+  rating float default 0,
+  is_active boolean default true,
+  schedule jsonb,
+  created_at timestamptz default now()
+);
+
+alter table public.workshops enable row level security;
+
+-- Todos pueden VER talleres activos
+create policy "ver talleres activos" on public.workshops
+  for select using (is_active = true);
+
+-- Solo el owner edita su taller
+create policy "owner edita su taller" on public.workshops
+  for update using (auth.uid() = owner_id);
+
+-- Super admin control total
+create policy "super_admin workshops" on public.workshops
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );
+
+-- =============================================
+-- TABLA: car_brands
+-- =============================================
+create table public.car_brands (
+  id uuid default uuid_generate_v4() primary key,
+  name text not null,
+  logo_url text,
+  is_active boolean default true
+);
+
+alter table public.car_brands enable row level security;
+
+-- Todos pueden ver marcas activas (catálogo público)
+create policy "ver marcas" on public.car_brands
+  for select using (is_active = true);
+
+-- Solo super_admin modifica
+create policy "admin marcas" on public.car_brands
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );
+
+-- =============================================
+-- TABLA: car_models
+-- =============================================
+create table public.car_models (
+  id uuid default uuid_generate_v4() primary key,
+  brand_id uuid references public.car_brands(id),
+  name text not null,
+  body_type text check (body_type in ('sedan','hatchback','suv','pickup','van'))
+);
+
+alter table public.car_models enable row level security;
+
+create policy "ver modelos" on public.car_models
+  for select using (true);
+
+create policy "admin modelos" on public.car_models
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );
+
+-- =============================================
+-- TABLA: car_years
+-- =============================================
+create table public.car_years (
+  id uuid default uuid_generate_v4() primary key,
+  model_id uuid references public.car_models(id),
+  year int not null,
+  engine_config text,
+  transmission text check (transmission in ('manual','automatic','cvt')),
+  fuel_type text check (fuel_type in ('gasoline','diesel','hybrid'))
+);
+
+alter table public.car_years enable row level security;
+
+create policy "ver años" on public.car_years
+  for select using (true);
+
+create policy "admin años" on public.car_years
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );
+
+-- =============================================
+-- TABLA: user_cars (garage del cliente)
+-- =============================================
+create table public.user_cars (
+  id uuid default uuid_generate_v4() primary key,
+  user_id uuid references public.profiles(id) on delete cascade,
+  year_id uuid references public.car_years(id),
+  nickname text,
+  plate text,
+  mileage int,
+  last_service_date date,
+  is_favorite boolean default false,
+  created_at timestamptz default now()
+);
+
+alter table public.user_cars enable row level security;
+
+-- Solo el dueño ve sus autos
+create policy "ver mis autos" on public.user_cars
+  for select using (auth.uid() = user_id);
+
+create policy "insertar mis autos" on public.user_cars
+  for insert with check (auth.uid() = user_id);
+
+create policy "editar mis autos" on public.user_cars
+  for update using (auth.uid() = user_id);
+
+create policy "borrar mis autos" on public.user_cars
+  for delete using (auth.uid() = user_id);
+
+-- =============================================
+-- TABLA: services
+-- =============================================
+create table public.services (
+  id uuid default uuid_generate_v4() primary key,
+  category text check (category in ('tuning','brakes','oil','other')),
+  name text not null,
+  description text,
+  duration_minutes int,
+  image_url text,
+  is_active boolean default true,
+  sort_order int default 0
+);
+
+alter table public.services enable row level security;
+
+create policy "ver servicios" on public.services
+  for select using (is_active = true);
+
+create policy "admin servicios" on public.services
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );
+
+-- =============================================
+-- TABLA: service_prices
+-- =============================================
+create table public.service_prices (
+  id uuid default uuid_generate_v4() primary key,
+  service_id uuid references public.services(id),
+  year_id uuid references public.car_years(id),
+  base_price decimal(10,2) not null,
+  parts_included boolean default false,
+  notes text,
+  updated_by uuid references public.profiles(id),
+  updated_at timestamptz default now()
+);
+
+alter table public.service_prices enable row level security;
+
+-- Todos pueden VER precios (cotizador público)
+create policy "ver precios" on public.service_prices
+  for select using (true);
+
+-- Solo super_admin modifica precios
+create policy "admin precios" on public.service_prices
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );
+
+-- =============================================
+-- TABLA: appointments
+-- =============================================
+create table public.appointments (
+  id uuid default uuid_generate_v4() primary key,
+  client_id uuid references public.profiles(id),
+  workshop_id uuid references public.workshops(id),
+  mechanic_id uuid references public.profiles(id),
+  user_car_id uuid references public.user_cars(id),
+  service_id uuid references public.services(id),
+  price_id uuid references public.service_prices(id),
+  final_price decimal(10,2),
+  status text default 'pending'
+    check (status in ('pending','confirmed','in_progress','completed','cancelled')),
+  scheduled_at timestamptz,
+  is_immediate boolean default false,
+  notes text,
+  mechanic_notes text,
+  wa_thread_id text,
+  completed_at timestamptz,
+  created_at timestamptz default now()
+);
+
+alter table public.appointments enable row level security;
+
+-- Cliente ve sus citas
+create policy "cliente ve sus citas" on public.appointments
+  for select using (auth.uid() = client_id);
+
+-- Cliente crea citas
+create policy "cliente crea cita" on public.appointments
+  for insert with check (auth.uid() = client_id);
+
+-- Taller ve citas de su taller
+create policy "taller ve sus citas" on public.appointments
+  for select using (
+    exists (
+      select 1 from public.workshops
+      where id = workshop_id and owner_id = auth.uid()
+    )
+  );
+
+-- Mecánico ve sus citas asignadas
+create policy "mecanico ve sus citas" on public.appointments
+  for select using (auth.uid() = mechanic_id);
+
+-- Mecánico actualiza sus citas
+create policy "mecanico actualiza" on public.appointments
+  for update using (auth.uid() = mechanic_id);
+
+-- Super admin todo
+create policy "admin citas" on public.appointments
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );
+
+-- =============================================
+-- TABLA: loyalty_events
+-- =============================================
+create table public.loyalty_events (
+  id uuid default uuid_generate_v4() primary key,
+  user_id uuid references public.profiles(id),
+  appointment_id uuid references public.appointments(id),
+  event_type text check (event_type in ('service_completed','referral','promo_applied','birthday')),
+  points_delta int not null,
+  balance_after int not null,
+  description text,
+  created_at timestamptz default now()
+);
+
+alter table public.loyalty_events enable row level security;
+
+create policy "ver mis puntos" on public.loyalty_events
+  for select using (auth.uid() = user_id);
+
+create policy "admin loyalty" on public.loyalty_events
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );
+
+-- =============================================
+-- TABLA: promotions
+-- =============================================
+create table public.promotions (
+  id uuid default uuid_generate_v4() primary key,
+  title text not null,
+  trigger_type text check (trigger_type in ('service_count','time_since','mileage','birthday','manual')),
+  trigger_value jsonb,
+  discount_type text check (discount_type in ('percentage','fixed','free_service')),
+  discount_value decimal(10,2),
+  valid_from date,
+  valid_until date,
+  is_active boolean default true
+);
+
+alter table public.promotions enable row level security;
+
+create policy "ver promociones activas" on public.promotions
+  for select using (is_active = true);
+
+create policy "admin promociones" on public.promotions
+  for all using (
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'super_admin'
+    )
+  );

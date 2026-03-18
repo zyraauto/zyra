@@ -1,0 +1,97 @@
+{
+  "nav": {
+    "workshops": "Workshops",
+    "services": "Services",
+    "quoter": "Get a Quote",
+    "dashboard": "Dashboard",
+    "signOut": "Sign out",
+    "login": "Sign in",
+    "register": "Sign up"
+  },
+  "auth": {
+    "login": {
+      "title": "Welcome back",
+      "subtitle": "Sign in to your AutoService Pro account",
+      "email": "Email",
+      "password": "Password",
+      "forgotPassword": "Forgot password?",
+      "submit": "Sign in",
+      "loading": "Signing in…",
+      "noAccount": "Don't have an account?",
+      "signUp": "Sign up",
+      "orContinueWith": "Or continue with"
+    },
+    "register": {
+      "title": "Create your account",
+      "subtitle": "Join AutoService Pro today",
+      "fullName": "Full name",
+      "email": "Email",
+      "password": "Password",
+      "confirmPassword": "Confirm password",
+      "submit": "Create account",
+      "loading": "Creating account…",
+      "hasAccount": "Already have an account?",
+      "signIn": "Sign in"
+    }
+  },
+  "dashboard": {
+    "welcome": "Dashboard",
+    "subtitle": "Welcome back! Here's an overview of your activity.",
+    "upcoming": "Upcoming",
+    "completed": "Completed",
+    "garage": "Cars in garage",
+    "upcomingAppointments": "Upcoming appointments",
+    "viewAll": "View all",
+    "bookService": "Book a service",
+    "noUpcoming": "No upcoming appointments.",
+    "activePromotions": "Active promotions",
+    "noPromotions": "No active promotions right now."
+  },
+  "appointments": {
+    "title": "My Appointments",
+    "subtitle": "Track and manage your service history.",
+    "book": "Book service",
+    "upcoming": "Upcoming",
+    "completed": "Completed",
+    "cancelled": "Cancelled",
+    "noAppointments": "No appointments in this category.",
+    "status": {
+      "pending": "Pending",
+      "confirmed": "Confirmed",
+      "in_progress": "In progress",
+      "completed": "Completed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "garage": {
+    "title": "My Garage",
+    "subtitle": "Manage your vehicles.",
+    "addCar": "Add car",
+    "noCars": "No cars in your garage",
+    "noCarsSubtitle": "Add your first car to get started.",
+    "addFirst": "Add your first car"
+  },
+  "points": {
+    "title": "My Points",
+    "subtitle": "Earn points on every service and redeem them for discounts.",
+    "balance": "Current balance",
+    "unit": "loyalty points",
+    "howToEarn": "How to earn points",
+    "history": "Points history",
+    "noHistory": "No activity yet. Complete a service to earn your first points!"
+  },
+  "common": {
+    "loading": "Loading…",
+    "error": "Something went wrong.",
+    "retry": "Try again",
+    "back": "Back",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "view": "View",
+    "close": "Close",
+    "confirm": "Confirm",
+    "optional": "optional"
+  }
+}
