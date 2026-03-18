@@ -3,6 +3,18 @@ import { z } from "zod";
 import { ok, err, requireAuth } from "@/lib/api";
 import { sendPushNotification, PushTemplates } from "@/lib/notifications/push";
 import type { PushSubscription, PushPayload } from "@/lib/notifications/push";
+import webpush from "web-push";
+
+// ✅ Configuración VAPID (de tus variables de entorno en Vercel)
+if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+  throw new Error("VAPID keys are not set in environment variables");
+}
+
+webpush.setVapidDetails(
+  `mailto:zyra@zyraauto.com`,
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
 
 const SubscriptionSchema = z.object({
   userId: z.string().uuid(),
@@ -10,7 +22,7 @@ const SubscriptionSchema = z.object({
     endpoint: z.string().url(),
     keys: z.object({
       p256dh: z.string(),
-      auth:   z.string(),
+      auth: z.string(),
     }),
   }),
 });
@@ -20,7 +32,7 @@ const SendSchema = z.object({
     endpoint: z.string().url(),
     keys: z.object({
       p256dh: z.string(),
-      auth:   z.string(),
+      auth: z.string(),
     }),
   }),
   template: z.enum([
@@ -29,7 +41,6 @@ const SendSchema = z.object({
     "appointmentReady",
     "pointsEarned",
   ]),
-  // ✅ Zod v4: z.record requiere key + value
   payload: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -46,7 +57,6 @@ export async function POST(req: NextRequest) {
 
     const { subscription, template, payload } = parsed.data;
 
-    // ✅ typed para evitar undefined implícito
     let pushPayload: PushPayload;
 
     switch (template) {
