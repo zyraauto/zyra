@@ -5,17 +5,6 @@ import { sendPushNotification, PushTemplates } from "@/lib/notifications/push";
 import type { PushSubscription, PushPayload } from "@/lib/notifications/push";
 import webpush from "web-push";
 
-// ✅ Configuración VAPID (de tus variables de entorno en Vercel)
-if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
-  throw new Error("VAPID keys are not set in environment variables");
-}
-
-webpush.setVapidDetails(
-  `mailto:zyra@zyraauto.com`,
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
-
 const SubscriptionSchema = z.object({
   userId: z.string().uuid(),
   subscription: z.object({
@@ -45,6 +34,17 @@ const SendSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  // ✅ Configuración VAPID en runtime
+  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+    return err("VAPID keys are not set in environment variables", 500);
+  }
+
+  webpush.setVapidDetails(
+    `mailto:zyra@zyraauto.com`,
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+
   const { user, error } = await requireAuth();
   if (error) return error;
 
