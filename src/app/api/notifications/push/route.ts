@@ -5,6 +5,7 @@ import { sendPushNotification, PushTemplates } from "@/lib/notifications/push";
 import type { PushSubscription, PushPayload } from "@/lib/notifications/push";
 import webpush from "web-push";
 
+// --- Schemas
 const SubscriptionSchema = z.object({
   userId: z.string().uuid(),
   subscription: z.object({
@@ -33,16 +34,20 @@ const SendSchema = z.object({
   payload: z.record(z.string(), z.unknown()).optional(),
 });
 
+// --- Handler POST
 export async function POST(req: NextRequest) {
-  // ✅ Configuración VAPID en runtime
-  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+  // ✅ Leer VAPID keys en runtime
+  const publicKey = process.env.VAPID_PUBLIC_KEY!;
+  const privateKey = process.env.VAPID_PRIVATE_KEY!;
+
+  if (!publicKey || !privateKey) {
     return err("VAPID keys are not set in environment variables", 500);
   }
 
   webpush.setVapidDetails(
     `mailto:zyra@zyraauto.com`,
-    process.env.VAPID_PUBLIC_KEY,
-    process.env.VAPID_PRIVATE_KEY
+    publicKey,
+    privateKey
   );
 
   const { user, error } = await requireAuth();
@@ -50,7 +55,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
 
-  // Route: send notification
+  // --- Ruta: enviar notificación
   if ("template" in body) {
     const parsed = SendSchema.safeParse(body);
     if (!parsed.success) return err(parsed.error.issues[0].message);
@@ -91,7 +96,7 @@ export async function POST(req: NextRequest) {
     return ok({ sent: true });
   }
 
-  // Route: register subscription
+  // --- Ruta: registrar subscription
   const parsed = SubscriptionSchema.safeParse(body);
   if (!parsed.success) return err(parsed.error.issues[0].message);
 
