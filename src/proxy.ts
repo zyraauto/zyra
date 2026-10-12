@@ -1,5 +1,8 @@
 // Next 16: este archivo se llama proxy.ts (antes middleware.ts) y exporta la función `proxy`.
-// Encadena: 1) idioma (next-intl)  2) CSP con nonce  3) sesión de Supabase y rutas protegidas.
+// Encadena: 1) idioma (next-intl)  2) CSP con nonce  3) sesión de Supabase y rutas protegidas por tenant.
+//
+// Aislamiento multi-tenant SIN consultas a la base de datos:
+// el tenant se lee de user.app_metadata.tenant_id (solo escribible con service role).
 import { NextRequest, NextResponse } from 'next/server';
 import createIntlMiddleware from 'next-intl/middleware';
 import { createServerClient } from '@supabase/ssr';
@@ -7,10 +10,18 @@ import { routing } from '@/i18n/routing'; // AJUSTA esta ruta a donde tengas tu 
 
 const handleI18n = createIntlMiddleware(routing);
 
-// /onboarding NO se protege aquí: un visitante nuevo crea su cuenta ahí mismo.
-const PROTECTED = /^\/([a-z]{2}\/)?(dashboard|admin|client|mechanic|supplier|workshop)(\/|$)/;
-// Rutas que además exigen tener un taller registrado.
-const NEEDS_WORKSHOP = /^\/([a-z]{2}\/)?(dashboard|workshop)(\/|$)/;
+// Todas las rutas se evalúan SIN el prefijo de idioma (/es/workshop/x -> /workshop/x).
+// Exigen sesión:
+const PROTECTED = /^\/(dashboard|admin|client|mechanic|supplier|workshop)(\/|$)/;
+// Además exigen tener un taller (tenant_id):
+const NEEDS_TENANT = /^\/(dashboard|workshop)(\/|$)/;
+const ONBOARDING = /^\/onboarding(\/|$)/;
+// Páginas de acceso: un usuario con taller no tiene nada que hacer ahí.
+// (reset-password y similares NO van aquí: necesitan sesión de recuperación.)
+const AUTH_PAGES = /^\/(login|signup|register)(\/|$)/;
+const API = /^\/(api|trpc)(\/|$)/;
+
+const HOME_AFTER_LOGIN = '/workshop/dashboard';
 
 function buildCsp(nonce: string) {
   const dev = process.env.NODE_ENV === 'development';
@@ -30,22 +41,9 @@ function buildCsp(nonce: string) {
   ].join('; ');
 }
 
-export async function proxy(request: NextRequest) {
-  const nonce = btoa(crypto.randomUUID());
-  const csp = buildCsp(nonce);
-
-  // 1) Idioma: /public -> /es/public. Le pasamos el nonce y la CSP como cabeceras de la petición.
-  const requestHeaders = new Headers(request.headers);
-  requestHeaders.set('x-nonce', nonce);
-  requestHeaders.set('Content-Security-Policy', csp);
-  const response = handleI18n(new NextRequest(request, { headers: requestHeaders }));
-  response.headers.set('Content-Security-Policy', csp);
-
-  // Si next-intl redirige (p. ej. /public -> /es/public), terminamos aquí.
-  if (response.status >= 300 && response.status < 400) return response;
-
-  // 2) Sesión de Supabase
-  const supabase = createServerClient(
+// Cliente SSR de servidor: lee cookies de la petición y escribe las renovadas en la respuesta.
+function createSupabase(request: NextRequest, response: NextResponse) {
+  return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -59,36 +57,88 @@ export async function proxy(request: NextRequest) {
       },
     }
   );
+}
 
-  // getUser() valida el token con Supabase (getSession() solo lee la cookie y se puede falsificar).
-  const { data: { user } } = await supabase.auth.getUser();
+export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
 
-  const seg = path.split('/')[1];
-  const locale = (routing.locales as readonly string[]).includes(seg) ? seg : routing.defaultLocale;
+  // ---------- API / tRPC: sin idioma ni redirecciones; solo refresca la sesión ----------
+  if (API.test(path)) {
+    const apiResponse = NextResponse.next({ request: { headers: new Headers(request.headers) } });
+    const supabase = createSupabase(request, apiResponse);
+    await supabase.auth.getUser(); // renueva cookies si el token está por vencer
+    return apiResponse;
+  }
+
+  // ---------- 1) Idioma + 2) CSP con nonce ----------
+  const nonce = btoa(crypto.randomUUID());
+  const csp = buildCsp(nonce);
+
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-nonce', nonce);
+  requestHeaders.set('Content-Security-Policy', csp);
+  const response = handleI18n(new NextRequest(request, { headers: requestHeaders }));
+  response.headers.set('Content-Security-Policy', csp);
+
+  // Si next-intl redirige (p. ej. /workshop -> /es/workshop), terminamos aquí.
+  if (response.status >= 300 && response.status < 400) return response;
+
+  // ---------- Idioma y ruta sin prefijo ----------
+  const segments = path.split('/');
+  const hasLocale = (routing.locales as readonly string[]).includes(segments[1]);
+  const locale = hasLocale ? segments[1] : routing.defaultLocale;
+  const barePath = hasLocale ? `/${segments.slice(2).join('/')}` : path;
+
+  const isProtected = PROTECTED.test(barePath);
+  const isOnboarding = ONBOARDING.test(barePath);
+  const isAuthPage = AUTH_PAGES.test(barePath);
+
+  // Páginas públicas (landing, precios, etc.): no necesitan validar sesión, así que no hay llamada a Auth.
+  if (!isProtected && !isOnboarding && !isAuthPage) return response;
+
+  // ---------- 3) Sesión de Supabase ----------
+  const supabase = createSupabase(request, response);
+
+  // getUser() valida el token con Supabase Auth y renueva cookies (getSession() solo lee la cookie y se puede falsificar).
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // Claim del tenant: null/undefined/'' => el usuario aún no tiene taller. Sin consultas a profiles/workshops.
+  const hasTenant = Boolean(user?.app_metadata?.tenant_id);
 
   const redirectTo = (to: string, withNext = false) => {
     const url = request.nextUrl.clone();
     url.pathname = to;
     url.search = '';
-    if (withNext) url.searchParams.set('next', path);
+    if (withNext) url.searchParams.set('next', `${path}${request.nextUrl.search}`);
     const res = NextResponse.redirect(url);
     response.cookies.getAll().forEach((c) => res.cookies.set(c)); // conserva la sesión renovada
     return res;
   };
 
-  // 3) Rutas protegidas
-  if (!user && PROTECTED.test(path)) return redirectTo(`/${locale}/login`, true);
+  // Sin sesión: rutas protegidas y onboarding -> login
+  if (!user && (isProtected || isOnboarding)) {
+    return redirectTo(`/${locale}/login`, true);
+  }
 
-  if (user && NEEDS_WORKSHOP.test(path)) {
-    const { data: profile } = await supabase.from('profiles').select('workshop_id').eq('id', user.id).maybeSingle();
-    if (!profile?.workshop_id) return redirectTo(`/${locale}/onboarding`);
+  if (user) {
+    // ERP sin taller registrado -> onboarding
+    if (NEEDS_TENANT.test(barePath) && !hasTenant) {
+      return redirectTo(`/${locale}/onboarding`);
+    }
+    // Taller ya registrado: no repetir onboarding ni volver a login
+    if (hasTenant && (isOnboarding || isAuthPage)) {
+      return redirectTo(`/${locale}${HOME_AFTER_LOGIN}`);
+    }
   }
 
   return response;
 }
 
 export const config = {
-  // Igual que el matcher de next-intl, y además excluye /auth (el callback de Google no lleva idioma).
-  matcher: ['/((?!api|auth|trpc|_next|_vercel|.*\\..*).*)'],
+  // Excluye estáticos (_next/static, _next/image, favicon.ico y cualquier archivo con extensión)
+  // y el callback de OAuth/magic link (no lleva idioma y no debe pasar por el proxy: evita bucles).
+  // /api y /trpc SÍ pasan, solo para renovar cookies de sesión.
+  matcher: ['/((?!_next|_vercel|auth/callback|.*\\..*).*)'],
 };
