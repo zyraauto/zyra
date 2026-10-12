@@ -1,26 +1,27 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient'; // ajusta la ruta si tu carpeta lib está en otro lado
+import { useRouter } from 'next/navigation';
+import { isAuthError, type AuthError } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/client';
 
 /**
- * Zyra AutoSaaS — Login v2
+ * Zyra AutoSaaS — Login v3 (Supabase Auth real, sin modo demo)
  *
  * Paleta oficial: Racing Red #E10600 · Deep Red #A80703 · Carbon #15151E · Graphite #292B33 · Off White #F3F3F5
  * Tipografías: Montserrat (títulos) + Inter (texto/formulario)
  *
- * Novedades:
- *  - Modo claro / oscuro / sistema (se guarda y NO depende de la config de Tailwind: usa variables CSS)
- *  - Panel izquierdo con órdenes de servicio "en vivo"
- *  - Verificación del taller (subdominio) con estado en tiempo real
- *  - Recuerda el último taller usado
- *  - Entrar con enlace al correo (magic link)
- *  - Verificación en dos pasos (código de 6 dígitos con pegado y autoavance)
- *  - Bloqueo temporal tras 5 intentos fallidos, con cuenta regresiva
- *  - Vibración del formulario al fallar, aviso de Bloq Mayús, pantalla de éxito
- *  - Ingreso con Google conectado a Supabase (signInWithOAuth)
+ * Autenticación:
+ *  - Contraseña: supabase.auth.signInWithPassword
+ *  - Enlace al correo: supabase.auth.signInWithOtp (solo usuarios existentes)
+ *  - Google: supabase.auth.signInWithOAuth con redirectTo -> /auth/callback
+ *  - 2FA (TOTP): supabase.auth.mfa (challenge + verify) cuando la cuenta lo exige
+ *  - Todo AuthError se captura y se muestra en la UI sin romper la aplicación
  *
- * Conexión con Supabase: busca los comentarios "TODO(supabase)".
+ * Requiere:
+ *  - '@/lib/supabase/client' exportando createClient() (basado en @supabase/ssr -> createBrowserClient)
+ *  - La ruta app/auth/callback/route.ts que intercambia el code por sesión (exchangeCodeForSession)
+ *  - Agregar `${origin}/auth/callback` a "Redirect URLs" en Supabase -> Authentication -> URL Configuration
  */
 
 const WORKSHOPS_ONLINE = 128;
@@ -29,20 +30,49 @@ const LOCK_SECONDS = 30;
 const THEME_KEY = 'zyra-theme';
 const WORKSPACE_KEY = 'zyra-workspace';
 
-// Ruta a la que llega el usuario después de iniciar sesión con Google.
-// Si usas @supabase/ssr (App Router), cámbiala a '/auth/callback' y crea esa ruta (ver explicación).
-const GOOGLE_REDIRECT_PATH = '/dashboard';
-
-// En true acepta cualquier credencial para que puedas probar el diseño sin backend.
-const DEMO_MODE = true;
+// Ruta a la que se va después de iniciar sesión con contraseña + 2FA.
+const POST_LOGIN_PATH = '/dashboard';
 
 type Theme = 'light' | 'dark' | 'system';
 type Step = 'credentials' | 'magic-sent' | 'otp' | 'success';
 type Mode = 'password' | 'magic';
-type WsState = 'idle' | 'checking' | 'found';
 type IconProps = { className?: string };
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// ---------- Errores de Supabase -> mensajes limpios ----------
+function authMessage(err: AuthError): string {
+  if (err.name === 'AuthRetryableFetchError') {
+    return 'No pudimos conectar con el servidor. Revisa tu conexión e intenta de nuevo.';
+  }
+  switch (err.code) {
+    case 'invalid_credentials':
+      return 'Correo o contraseña incorrectos.';
+    case 'email_not_confirmed':
+      return 'Tu correo aún no está confirmado. Revisa tu bandeja de entrada.';
+    case 'over_request_rate_limit':
+    case 'over_email_send_rate_limit':
+    case 'over_sms_send_rate_limit':
+      return 'Demasiadas solicitudes. Espera un momento antes de intentar de nuevo.';
+    case 'otp_disabled':
+    case 'signup_disabled':
+    case 'user_not_found':
+      return 'No encontramos una cuenta con ese correo.';
+    case 'user_banned':
+      return 'Esta cuenta está suspendida. Contacta a tu administrador.';
+    case 'mfa_verification_failed':
+    case 'mfa_challenge_expired':
+      return 'Código incorrecto o vencido. Revisa tu app de autenticación.';
+    case 'provider_disabled':
+      return 'Este método de acceso no está habilitado.';
+    default:
+      return err.message || 'Ocurrió un error de autenticación. Intenta de nuevo.';
+  }
+}
+
+function toMessage(err: unknown): string {
+  if (isAuthError(err)) return authMessage(err);
+  if (err instanceof Error && err.message) return err.message;
+  return 'Ocurrió un error inesperado. Intenta de nuevo.';
+}
 
 // ---------- Íconos (SVG sin dependencias) ----------
 const mk = (paths: React.ReactNode, strokeWidth = 2) =>
@@ -89,7 +119,7 @@ function ZyraMark({ className }: IconProps) {
   );
 }
 
-// ---------- Órdenes "en vivo" del panel izquierdo ----------
+// ---------- Órdenes "en vivo" del panel izquierdo (vista previa decorativa del producto) ----------
 const STATUS = [
   { label: 'Pendiente', color: '#F59E0B' },
   { label: 'En proceso', color: '#8B5CF6' },
@@ -165,6 +195,10 @@ const STYLES = `
 `;
 
 export default function ZyraLogin() {
+  const router = useRouter();
+  // Una sola referencia estable al cliente de navegador (@supabase/ssr) durante la vida del componente.
+  const supabase = useMemo(() => createClient(), []);
+
   // ----- Tema -----
   const [theme, setTheme] = useState<Theme>('system');
   const [systemDark, setSystemDark] = useState(false);
@@ -175,7 +209,6 @@ export default function ZyraLogin() {
   const [step, setStep] = useState<Step>('credentials');
   const [mode, setMode] = useState<Mode>('password');
   const [workspace, setWorkspace] = useState('');
-  const [wsState, setWsState] = useState<WsState>('idle');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -185,19 +218,21 @@ export default function ZyraLogin() {
   const [error, setError] = useState('');
   const [shake, setShake] = useState(false);
 
-  // ----- Seguridad -----
+  // ----- Seguridad (límite visual en el cliente; el límite real lo aplica Supabase) -----
   const [attempts, setAttempts] = useState(0);
   const [lockedUntil, setLockedUntil] = useState(0);
   const [now, setNow] = useState(0);
 
-  // ----- OTP -----
+  // ----- OTP / MFA -----
   const [otp, setOtp] = useState<string[]>(Array(6).fill(''));
   const otpRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const mfaFactorId = useRef<string | null>(null);
 
   // ----- Panel en vivo -----
   const [orders, setOrders] = useState(INITIAL_ORDERS);
 
   const emailIsValid = email === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const workspaceIsValid = workspace.length >= 3;
   const secondsLeft = Math.max(0, Math.ceil((lockedUntil - now) / 1000));
   const isLocked = secondsLeft > 0;
 
@@ -230,21 +265,6 @@ export default function ZyraLogin() {
       /* ignorar */
     }
   };
-
-  // Verificación del taller (con espera para no consultar en cada tecla)
-  useEffect(() => {
-    if (workspace.length < 3) {
-      setWsState('idle');
-      return;
-    }
-    setWsState('checking');
-    const t = setTimeout(() => {
-      // TODO(supabase): consultar si existe el taller, p. ej.
-      // const { data } = await supabase.from('workspaces').select('id').eq('slug', workspace).maybeSingle();
-      setWsState('found');
-    }, 600);
-    return () => clearTimeout(t);
-  }, [workspace]);
 
   // Cuenta regresiva del bloqueo
   useEffect(() => {
@@ -298,25 +318,10 @@ export default function ZyraLogin() {
     }
   };
 
-  // ----- Llamadas al backend (reemplaza por Supabase) -----
-  const signInWithPassword = async (): Promise<{ ok: boolean; needs2fa: boolean }> => {
-    // TODO(supabase): const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    await sleep(1200);
-    return { ok: DEMO_MODE, needs2fa: true };
-  };
-
-  const sendMagicLink = async (): Promise<boolean> => {
-    // TODO(supabase): await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: `https://${workspace}.zyra.app/auth/callback` } });
-    await sleep(1000);
-    return true;
-  };
-
-  const verifyOtp = async (code: string): Promise<boolean> => {
-    // TODO(supabase): const factors = await supabase.auth.mfa.listFactors();
-    // const challenge = await supabase.auth.mfa.challenge({ factorId });
-    // await supabase.auth.mfa.verify({ factorId, challengeId: challenge.data.id, code });
-    await sleep(900);
-    return DEMO_MODE && code.length === 6;
+  const finishLogin = () => {
+    setStep('success');
+    router.replace(POST_LOGIN_PATH);
+    router.refresh();
   };
 
   // ----- Handlers -----
@@ -340,46 +345,84 @@ export default function ZyraLogin() {
 
     setLoading(true);
     try {
+      // ----- Enlace mágico -----
       if (mode === 'magic') {
-        const ok = await sendMagicLink();
-        if (ok) {
-          persistWorkspace();
-          setStep('magic-sent');
-        } else fail('No pudimos enviar el enlace. Intenta de nuevo.');
+        const { error: otpError } = await supabase.auth.signInWithOtp({
+          email,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
+            shouldCreateUser: false, // el login no debe registrar cuentas nuevas
+          },
+        });
+        if (otpError) {
+          fail(authMessage(otpError));
+          return;
+        }
+        persistWorkspace();
+        setStep('magic-sent');
         return;
       }
 
-      const res = await signInWithPassword();
-      if (!res.ok) {
-        const next = attempts + 1;
-        if (next >= MAX_ATTEMPTS) {
-          setAttempts(0);
-          setLockedUntil(Date.now() + LOCK_SECONDS * 1000);
-          setNow(Date.now());
-          fail(`Demasiados intentos. Por seguridad, espera ${LOCK_SECONDS} s.`);
+      // ----- Contraseña -----
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      if (signInError) {
+        // Solo las credenciales incorrectas cuentan para el bloqueo visual.
+        if (signInError.code === 'invalid_credentials') {
+          const next = attempts + 1;
+          if (next >= MAX_ATTEMPTS) {
+            setAttempts(0);
+            setLockedUntil(Date.now() + LOCK_SECONDS * 1000);
+            setNow(Date.now());
+            fail(`Demasiados intentos. Por seguridad, espera ${LOCK_SECONDS} s.`);
+          } else {
+            setAttempts(next);
+            fail(`${authMessage(signInError)} Te quedan ${MAX_ATTEMPTS - next} intentos.`);
+          }
         } else {
-          setAttempts(next);
-          fail(`Correo o contraseña incorrectos. Te quedan ${MAX_ATTEMPTS - next} intentos.`);
+          fail(authMessage(signInError));
         }
         return;
       }
 
       setAttempts(0);
       persistWorkspace();
-      if (res.needs2fa) {
+
+      // ¿La cuenta exige segundo factor?
+      const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (aalError) {
+        fail(authMessage(aalError));
+        return;
+      }
+
+      if (aal.nextLevel === 'aal2' && aal.currentLevel !== 'aal2') {
+        const { data: factors, error: factorsError } = await supabase.auth.mfa.listFactors();
+        if (factorsError) {
+          fail(authMessage(factorsError));
+          return;
+        }
+        const totp = factors.totp[0]; // solo factores verificados
+        if (!totp) {
+          await supabase.auth.signOut();
+          fail('Tu cuenta requiere verificación en dos pasos, pero no tiene un factor configurado. Contacta a tu administrador.');
+          return;
+        }
+        mfaFactorId.current = totp.id;
         setOtp(Array(6).fill(''));
         setStep('otp');
         setTimeout(() => otpRefs.current[0]?.focus(), 50);
-      } else {
-        setStep('success');
+        return;
       }
+
+      finishLogin();
+    } catch (err) {
+      fail(toMessage(err));
     } finally {
       setLoading(false);
     }
   };
 
   // Ingreso con Google (Supabase OAuth).
-  // Si todo sale bien, el navegador se va a Google y luego vuelve a GOOGLE_REDIRECT_PATH,
+  // Si todo sale bien, el navegador se va a Google y luego vuelve a /auth/callback,
   // por eso no apagamos el "loading" en el caso exitoso.
   const handleGoogleLogin = async () => {
     if (loading) return;
@@ -387,34 +430,57 @@ export default function ZyraLogin() {
     setError('');
     persistWorkspace();
 
-    const { error: oauthError } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}${GOOGLE_REDIRECT_PATH}`,
-      },
-    });
+    try {
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
 
-    if (oauthError) {
-      console.error('Error al conectar con Google:', oauthError.message);
-      fail('No pudimos conectar con Google. Intenta de nuevo.');
+      if (oauthError) {
+        fail(authMessage(oauthError));
+        setLoading(false);
+      }
+    } catch (err) {
+      fail(toMessage(err));
       setLoading(false);
     }
   };
 
   const submitOtp = async (digits: string[]) => {
     const code = digits.join('');
-    if (code.length < 6 || loading) return;
+    const factorId = mfaFactorId.current;
+    if (code.length < 6 || loading || !factorId) return;
     setLoading(true);
     setError('');
-    const ok = await verifyOtp(code);
-    setLoading(false);
-    if (ok) {
-      setStep('success');
-      // TODO: router.push('/dashboard') — con useRouter() de next/navigation
-    } else {
-      fail('Código incorrecto. Revisa tu app de autenticación.');
+
+    try {
+      const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({ factorId });
+      if (challengeError) {
+        fail(authMessage(challengeError));
+        return;
+      }
+
+      const { error: verifyError } = await supabase.auth.mfa.verify({
+        factorId,
+        challengeId: challenge.id,
+        code,
+      });
+      if (verifyError) {
+        fail(authMessage(verifyError));
+        setOtp(Array(6).fill(''));
+        otpRefs.current[0]?.focus();
+        return;
+      }
+
+      finishLogin();
+    } catch (err) {
+      fail(toMessage(err));
       setOtp(Array(6).fill(''));
       otpRefs.current[0]?.focus();
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -444,7 +510,16 @@ export default function ZyraLogin() {
     if (pasted.length === 6) submitOtp(next);
   };
 
-  const backToCredentials = () => {
+  const backToCredentials = async () => {
+    // Si ya había una sesión parcial (aal1) esperando el segundo factor, se cierra.
+    if (step === 'otp') {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        /* ignorar: el usuario vuelve al formulario de todos modos */
+      }
+      mfaFactorId.current = null;
+    }
     setStep('credentials');
     setError('');
     setPassword('');
@@ -603,18 +678,10 @@ export default function ZyraLogin() {
                         placeholder="taller-hermanos-lopez"
                         disabled={loading}
                       />
-                      {wsState === 'checking' && <Loader2 className="w-4 h-4 zl-faint animate-spin shrink-0" />}
-                      {wsState === 'found' && (
-                        <span className="shrink-0 grid place-items-center w-4 h-4 rounded-full bg-green-500 text-white zl-pop" title="Taller encontrado">
-                          <Check className="w-2.5 h-2.5" />
-                        </span>
-                      )}
                       <span className="zl-suffix ml-2">.zyra.app</span>
                     </div>
-                    {wsState === 'found' && (
-                      <p className="text-xs mt-1.5 text-green-600 dark:text-green-400" style={{ color: '#22A559' }}>
-                        Taller encontrado: {workspace}.zyra.app
-                      </p>
+                    {workspaceIsValid && (
+                      <p className="text-xs mt-1.5 zl-faint">Ingresarás a {workspace}.zyra.app</p>
                     )}
                   </div>
 
@@ -760,7 +827,7 @@ export default function ZyraLogin() {
               <h2 className="zl-head font-bold text-[1.5rem] mb-2">Revisa tu correo</h2>
               <p className="zl-muted text-sm mb-1">Enviamos un enlace de acceso a</p>
               <p className="font-semibold text-sm mb-6 break-all">{email}</p>
-              <p className="zl-faint text-xs mb-6">El enlace funciona una sola vez y caduca en 15 minutos.</p>
+              <p className="zl-faint text-xs mb-6">El enlace funciona una sola vez y caduca en poco tiempo.</p>
               <button type="button" className="zl-btn zl-secondary" onClick={backToCredentials}>
                 <ArrowLeft className="w-4 h-4" /> Volver al inicio de sesión
               </button>

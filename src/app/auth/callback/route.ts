@@ -1,58 +1,63 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
+import { createClient } from '@/lib/supabase/server';
 
-// Destino de Google/magic link. Intercambia el código por una sesión guardada en cookies.
-// En el login cambia redirectTo a: `${window.location.origin}/auth/callback?next=/dashboard`
+const DEFAULT_NEXT = '/workshop/dashboard';
+const ONBOARDING_PATH = '/es/onboarding';
+const LOGIN_ERROR_PATH = '/es/login?error=auth_failed';
+
+/**
+ * Solo acepta rutas internas. Rechaza "//evil.com", "/\evil.com", "https://evil.com", etc.
+ * Se resuelve contra el origin y se verifica que siga siendo el mismo origin.
+ */
+function safeNextPath(raw: string | null, origin: string): string {
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) {
+    return DEFAULT_NEXT;
+  }
+  try {
+    const url = new URL(raw, origin);
+    if (url.origin !== origin) return DEFAULT_NEXT;
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return DEFAULT_NEXT;
+  }
+}
+
+// Destino de Google OAuth y magic link (flujo PKCE).
+// Intercambia el código por una sesión que @supabase/ssr guarda en cookies.
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
-  const rawNext = searchParams.get('next') ?? '/dashboard';
-  // Solo rutas internas: evita open-redirect (//evil.com o https://evil.com)
-  const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/dashboard';
+  const next = safeNextPath(searchParams.get('next'), origin);
 
-  if (code) {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll: () => cookieStore.getAll(),
-          setAll: (list) => list.forEach(({ name, value, options }) => cookieStore.set(name, value, options)),
-        },
-      }
-    );
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (!error) {
-      // Usuario sin taller -> registro; con taller -> destino pedido
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: profile } = user
-        ? await supabase.from('profiles').select('workshop_id').eq('id', user.id).maybeSingle()
-        : { data: null };
-      return NextResponse.redirect(`${origin}${profile?.workshop_id ? next : '/es/onboarding'}`);
-    }
+  // Caso C: el proveedor devolvió error o no llegó código.
+  if (searchParams.get('error') || !code) {
+    return NextResponse.redirect(`${origin}${LOGIN_ERROR_PATH}`);
   }
-  return NextResponse.redirect(`${origin}/es/login?error=auth`);
+
+  const supabase = await createClient();
+
+  const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+  if (exchangeError) {
+    return NextResponse.redirect(`${origin}${LOGIN_ERROR_PATH}`);
+  }
+
+  // getUser() valida el token contra Supabase Auth (no confía solo en la cookie).
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError || !user) {
+    return NextResponse.redirect(`${origin}${LOGIN_ERROR_PATH}`);
+  }
+
+  // app_metadata solo lo puede escribir el servidor (service role), por eso es seguro para autorizar.
+  const tenantId = user.app_metadata?.tenant_id;
+
+  // Caso A: usuario con taller -> destino solicitado.
+  if (tenantId) {
+    return NextResponse.redirect(`${origin}${next}`);
+  }
+
+  // Caso B: usuario nuevo sin taller -> registro del taller.
+  return NextResponse.redirect(`${origin}${ONBOARDING_PATH}`);
 }
-
-/* ---------------------------------------------------------------
-   lib/supabaseClient.ts  (reemplaza el actual: guarda la sesión en cookies, que es lo que lee el middleware)
-
-   import { createBrowserClient } from '@supabase/ssr';
-   export const supabase = createBrowserClient(
-     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-   );
-
-   next.config.ts  (cabeceras de seguridad)
-
-   const headers = [
-     { key: 'X-Frame-Options', value: 'DENY' },
-     { key: 'X-Content-Type-Options', value: 'nosniff' },
-     { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-     { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains' },
-     { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
-   ];
-   // dentro de nextConfig:  async headers() { return [{ source: '/(.*)', headers }]; }
-   --------------------------------------------------------------- */
