@@ -1,127 +1,94 @@
-import { createServerClient } from "@supabase/ssr";
-import { NextResponse, type NextRequest } from "next/server";
-import createMiddleware from "next-intl/middleware";
+// Next 16: este archivo se llama proxy.ts (antes middleware.ts) y exporta la función `proxy`.
+// Encadena: 1) idioma (next-intl)  2) CSP con nonce  3) sesión de Supabase y rutas protegidas.
+import { NextRequest, NextResponse } from 'next/server';
+import createIntlMiddleware from 'next-intl/middleware';
+import { createServerClient } from '@supabase/ssr';
+import { routing } from '@/i18n/routing'; // AJUSTA esta ruta a donde tengas tu routing de next-intl
 
-const LOCALES        = ["es", "en"] as const;
-const DEFAULT_LOCALE = "es";
+const handleI18n = createIntlMiddleware(routing);
 
-const intlMiddleware = createMiddleware({
-  locales:       LOCALES,
-  defaultLocale: DEFAULT_LOCALE,
-});
+// /onboarding NO se protege aquí: un visitante nuevo crea su cuenta ahí mismo.
+const PROTECTED = /^\/([a-z]{2}\/)?(dashboard|admin|client|mechanic|supplier|workshop)(\/|$)/;
+// Rutas que además exigen tener un taller registrado.
+const NEEDS_WORKSHOP = /^\/([a-z]{2}\/)?(dashboard|workshop)(\/|$)/;
 
-const PROTECTED_ROUTES: Record<string, string[]> = {
-  "/client":   ["client", "super_admin"],
-  "/workshop": ["workshop_admin", "super_admin"],
-  "/mechanic": ["mechanic", "super_admin"],
-  "/supplier": ["supplier", "super_admin"],
-  "/admin":    ["super_admin"],
-};
-
-const ROLE_DASHBOARD: Record<string, string> = {
-  super_admin:    "/admin/dashboard",
-  workshop_admin: "/workshop/dashboard",
-  mechanic:       "/mechanic/mis-citas",
-  client:         "/client/dashboard",
-  supplier:       "/supplier/ordenes",
-};
-
-const AUTH_PATHS = ["/auth/login", "/auth/registro"];
-
-function stripLocale(pathname: string): string {
-  return pathname.replace(/^\/(es|en)/, "") || "/";
-}
-
-function getLocale(pathname: string): string {
-  const match = pathname.match(/^\/(es|en)/);
-  return match ? match[1] : DEFAULT_LOCALE;
+function buildCsp(nonce: string) {
+  const dev = process.env.NODE_ENV === 'development';
+  const supa = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ''}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https://res.cloudinary.com",
+    "font-src 'self' data:",
+    `connect-src 'self' ${supa} ${supa.replace(/^http/, 'ws')}`,
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+    ...(dev ? [] : ['upgrade-insecure-requests']),
+  ].join('; ');
 }
 
 export async function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl;
-  const pathWithoutLocale = stripLocale(pathname);
-  const locale            = getLocale(pathname);
+  const nonce = btoa(crypto.randomUUID());
+  const csp = buildCsp(nonce);
 
-  const isProtected = Object.keys(PROTECTED_ROUTES).some((r) =>
-    pathWithoutLocale.startsWith(r)
-  );
-  const isAuthPath = AUTH_PATHS.includes(pathWithoutLocale);
+  // 1) Idioma: /public -> /es/public. Le pasamos el nonce y la CSP como cabeceras de la petición.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-nonce', nonce);
+  requestHeaders.set('Content-Security-Policy', csp);
+  const response = handleI18n(new NextRequest(request, { headers: requestHeaders }));
+  response.headers.set('Content-Security-Policy', csp);
 
-  if (!isProtected && !isAuthPath) {
-    return intlMiddleware(request);
-  }
+  // Si next-intl redirige (p. ej. /public -> /es/public), terminamos aquí.
+  if (response.status >= 300 && response.status < 400) return response;
 
-  // Build Supabase client
-  let supabaseResponse = NextResponse.next({ request });
-
+  // 2) Sesión de Supabase
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         getAll: () => request.cookies.getAll(),
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          supabaseResponse = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          );
-        },
+        setAll: (list) =>
+          list.forEach(({ name, value, options }) => {
+            request.cookies.set(name, value);
+            response.cookies.set(name, value, options);
+          }),
       },
     }
   );
 
+  // getUser() valida el token con Supabase (getSession() solo lee la cookie y se puede falsificar).
   const { data: { user } } = await supabase.auth.getUser();
+  const path = request.nextUrl.pathname;
 
-  // Single profile fetch
-  const role = await (async () => {
-    if (!user) return null;
-    const { data } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .single();
-    return (data as { role: string } | null)?.role ?? "visitor";
-  })();
+  const seg = path.split('/')[1];
+  const locale = (routing.locales as readonly string[]).includes(seg) ? seg : routing.defaultLocale;
 
-  // Redirect logged-in users away from auth pages
-  if (isAuthPath && user && role) {
-    const destination = ROLE_DASHBOARD[role] ?? "/";
-    return NextResponse.redirect(
-      new URL(`/${locale}${destination}`, request.url)
-    );
+  const redirectTo = (to: string, withNext = false) => {
+    const url = request.nextUrl.clone();
+    url.pathname = to;
+    url.search = '';
+    if (withNext) url.searchParams.set('next', path);
+    const res = NextResponse.redirect(url);
+    response.cookies.getAll().forEach((c) => res.cookies.set(c)); // conserva la sesión renovada
+    return res;
+  };
+
+  // 3) Rutas protegidas
+  if (!user && PROTECTED.test(path)) return redirectTo(`/${locale}/login`, true);
+
+  if (user && NEEDS_WORKSHOP.test(path)) {
+    const { data: profile } = await supabase.from('profiles').select('workshop_id').eq('id', user.id).maybeSingle();
+    if (!profile?.workshop_id) return redirectTo(`/${locale}/onboarding`);
   }
 
-  // Enforce protected routes
-  if (isProtected) {
-    if (!user) {
-      return NextResponse.redirect(
-        new URL(`/${locale}/auth/login`, request.url)
-      );
-    }
-
-    const allowedRoles =
-      Object.entries(PROTECTED_ROUTES).find(([route]) =>
-        pathWithoutLocale.startsWith(route)
-      )?.[1] ?? [];
-
-    if (!role || !allowedRoles.includes(role)) {
-      return NextResponse.redirect(
-        new URL(`/${locale}/auth/login?error=unauthorized`, request.url)
-      );
-    }
-  }
-
-  const intlResponse = intlMiddleware(request);
-  if (intlResponse) return intlResponse;
-
-  return supabaseResponse;
+  return response;
 }
 
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
-  ],
+  // Igual que el matcher de next-intl, y además excluye /auth (el callback de Google no lleva idioma).
+  matcher: ['/((?!api|auth|trpc|_next|_vercel|.*\\..*).*)'],
 };
