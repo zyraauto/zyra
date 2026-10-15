@@ -1,80 +1,103 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Monitor, Moon, Sun } from 'lucide-react';
+import { Moon, Sun } from 'lucide-react';
 
 // Misma clave que usa el login, así la elección se comparte entre pantallas.
 const KEY = 'zyra-theme';
-type Theme = 'light' | 'dark' | 'system';
+type Theme = 'light' | 'dark';
 
-const OPTIONS = [
-  ['light', Sun, 'Claro'],
-  ['dark', Moon, 'Oscuro'],
-  ['system', Monitor, 'Sistema'],
-] as const;
-
-// 'system' = sin atributo: manda la preferencia del dispositivo (prefers-color-scheme).
-function apply(t: Theme) {
-  const root = document.documentElement;
-  if (t === 'system') root.removeAttribute('data-theme');
-  else root.dataset.theme = t;
+// Tema guardado. Un valor antiguo 'system' (o ninguno) significa: manda el dispositivo.
+function readSaved(): Theme | null {
+  try {
+    const saved = localStorage.getItem(KEY);
+    return saved === 'light' || saved === 'dark' ? saved : null;
+  } catch {
+    return null; // localStorage no disponible
+  }
 }
 
-// Aplica el tema guardado sin mostrar botones. Úsalo en pantallas que no llevan ThemeToggle (o mientras cargan).
+function apply(t: Theme | null) {
+  const root = document.documentElement;
+  if (t) root.dataset.theme = t;
+  else root.removeAttribute('data-theme');
+}
+
+// Tema que se está viendo realmente (atributo o, si no hay, preferencia del dispositivo).
+function effective(): Theme {
+  const attr = document.documentElement.dataset.theme;
+  if (attr === 'light' || attr === 'dark') return attr;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+// Aplica el tema guardado sin mostrar botones. Ponlo UNA vez en el layout raíz (app/layout.tsx)
+// para que cualquier página por la que se navegue use el mismo tema.
 export function ThemeSync() {
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(KEY);
-      if (saved === 'light' || saved === 'dark' || saved === 'system') apply(saved);
-    } catch {
-      /* localStorage no disponible */
-    }
+    apply(readSaved());
+
+    // Si cambia en otra pestaña, se actualiza aquí también.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === KEY) apply(readSaved());
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, []);
   return null;
 }
 
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>('system');
+  // null hasta montar: evita desajuste de hidratación (el servidor no sabe el tema).
+  const [theme, setTheme] = useState<Theme | null>(null);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(KEY);
-      if (saved === 'light' || saved === 'dark' || saved === 'system') {
-        setTheme(saved);
-        apply(saved);
+    apply(readSaved());
+    setTheme(effective());
+
+    // Si no hay elección guardada y el dispositivo cambia de tema, el icono lo sigue.
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const sync = () => setTheme(effective());
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === KEY) {
+        apply(readSaved());
+        sync();
       }
-    } catch {
-      /* localStorage no disponible */
-    }
+    };
+    mq.addEventListener('change', sync);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      mq.removeEventListener('change', sync);
+      window.removeEventListener('storage', onStorage);
+    };
   }, []);
 
-  const choose = (t: Theme) => {
-    setTheme(t);
-    apply(t);
+  const toggle = () => {
+    const next: Theme = effective() === 'dark' ? 'light' : 'dark';
+    apply(next);
+    setTheme(next);
     try {
-      localStorage.setItem(KEY, t);
+      localStorage.setItem(KEY, next);
     } catch {
       /* ignorar */
     }
   };
 
+  const isDark = theme === 'dark';
+  const label = isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro';
+
   return (
-    <div role="radiogroup" aria-label="Tema de la página" className="inline-flex gap-0.5 p-[3px] rounded-[10px]" style={{ border: '1px solid var(--line)' }}>
-      {OPTIONS.map(([value, Icon, label]) => (
-        <button
-          key={value}
-          type="button"
-          role="radio"
-          aria-checked={theme === value}
-          aria-label={label}
-          title={label}
-          onClick={() => choose(value)}
-          className="grid place-items-center w-8 h-8 rounded-[7px] transition-colors"
-          style={theme === value ? { background: '#E10600', color: '#fff' } : { color: 'var(--muted)' }}
-        >
-          <Icon className="w-4 h-4" aria-hidden />
-        </button>
-      ))}
-    </div>
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={label}
+      title={label}
+      className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] transition-colors hover:text-[#E10600]"
+      // --line solo existe dentro del login (.zl-root). En el onboarding no está definida,
+      // así que se usa un borde derivado del color del texto, que siempre se ve en ambos temas.
+      style={{ border: '1px solid var(--line, color-mix(in srgb, currentColor 25%, transparent))' }}
+    >
+      {/* Modo oscuro → sol; modo claro → luna */}
+      {theme !== null && (isDark ? <Sun className="h-4 w-4" aria-hidden /> : <Moon className="h-4 w-4" aria-hidden />)}
+    </button>
   );
 }

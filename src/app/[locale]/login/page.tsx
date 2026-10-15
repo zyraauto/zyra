@@ -1,41 +1,44 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { isAuthError, type AuthError } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
+import ThemeToggle from '@/components/ThemeToggle';
 
 /**
- * Zyra AutoSaaS — Login v3 (Supabase Auth real, sin modo demo)
+ * Zyra AutoSaaS — Login v5 (Supabase Auth, autenticación centralizada)
  *
- * Paleta oficial: Racing Red #E10600 · Deep Red #A80703 · Carbon #15151E · Graphite #292B33 · Off White #F3F3F5
- * Tipografías: Montserrat (títulos) + Inter (texto/formulario)
+ * El usuario ingresa con correo y contraseña, se registra con correo y contraseña,
+ * o usa Google. El taller (tenant_id) lo resuelve el sistema a partir de los claims del JWT.
+ *
+ * Tema: lo controla <ThemeToggle /> (mismo botón y misma clave 'zyra-theme' que la landing).
+ * Pone data-theme en <html>; aquí solo se leen las variables CSS. Sin atributo manda el dispositivo.
  *
  * Autenticación:
  *  - Contraseña: supabase.auth.signInWithPassword
- *  - Enlace al correo: supabase.auth.signInWithOtp (solo usuarios existentes)
+ *  - Registro: supabase.auth.signUp({ email, password }) -> /auth/callback?next=/{locale}/onboarding
+ *  - Recuperar contraseña: supabase.auth.resetPasswordForEmail -> /auth/callback?next=/{locale}/reset-password
  *  - Google: supabase.auth.signInWithOAuth con redirectTo -> /auth/callback
  *  - 2FA (TOTP): supabase.auth.mfa (challenge + verify) cuando la cuenta lo exige
- *  - Todo AuthError se captura y se muestra en la UI sin romper la aplicación
  *
  * Requiere:
- *  - '@/lib/supabase/client' exportando createClient() (basado en @supabase/ssr -> createBrowserClient)
- *  - La ruta app/auth/callback/route.ts que intercambia el code por sesión (exchangeCodeForSession)
- *  - Agregar `${origin}/auth/callback` a "Redirect URLs" en Supabase -> Authentication -> URL Configuration
+ *  - '@/lib/supabase/client' exportando createClient()
+ *  - app/auth/callback/route.ts que intercambia el code por sesión
+ *  - `${origin}/auth/callback` en "Redirect URLs" de Supabase
  */
 
 const WORKSHOPS_ONLINE = 128;
 const MAX_ATTEMPTS = 5;
 const LOCK_SECONDS = 30;
-const THEME_KEY = 'zyra-theme';
-const WORKSPACE_KEY = 'zyra-workspace';
 
-// Ruta a la que se va después de iniciar sesión con contraseña + 2FA.
-const POST_LOGIN_PATH = '/dashboard';
+// Debe coincidir con Auth → Providers → Email → "Minimum password length" en Supabase.
+const MIN_PASSWORD = 8;
 
-type Theme = 'light' | 'dark' | 'system';
-type Step = 'credentials' | 'magic-sent' | 'otp' | 'success';
-type Mode = 'password' | 'magic';
+// Ruta a la que se va después de iniciar sesión.
+const POST_LOGIN_PATH = '/workshop/dashboard';
+
+type Step = 'credentials' | 'forgot' | 'forgot-sent' | 'signup' | 'signup-sent' | 'otp' | 'success';
 type IconProps = { className?: string };
 
 // ---------- Errores de Supabase -> mensajes limpios ----------
@@ -53,9 +56,17 @@ function authMessage(err: AuthError): string {
     case 'over_sms_send_rate_limit':
       return 'Demasiadas solicitudes. Espera un momento antes de intentar de nuevo.';
     case 'otp_disabled':
-    case 'signup_disabled':
     case 'user_not_found':
       return 'No encontramos una cuenta con ese correo.';
+    case 'signup_disabled':
+      return 'El registro con correo está deshabilitado temporalmente.';
+    case 'user_already_exists':
+    case 'email_exists':
+      return 'Ya existe una cuenta con ese correo. Inicia sesión o recupera tu contraseña.';
+    case 'weak_password':
+      return `La contraseña es muy débil. Usa al menos ${MIN_PASSWORD} caracteres, combinando letras y números.`;
+    case 'validation_failed':
+      return 'Revisa que tu correo y contraseña sean válidos.';
     case 'user_banned':
       return 'Esta cuenta está suspendida. Contacta a tu administrador.';
     case 'mfa_verification_failed':
@@ -100,12 +111,7 @@ const EyeOff = mk(<><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a13.16 
 const ShieldCheck = mk(<><path d="M12 2 4 5v6c0 5 3.5 8.5 8 11 4.5-2.5 8-6 8-11V5l-8-3Z" /><path d="m9 12 2 2 4-4" /></>);
 const AlertTriangle = mk(<><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></>);
 const Loader2 = mk(<path d="M21 12a9 9 0 1 1-9-9" />);
-const Sun = mk(<><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></>);
-const Moon = mk(<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />);
-const Monitor = mk(<><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></>);
 const Check = mk(<path d="m5 12 5 5 9-10" />, 3);
-const Sparkles = mk(<><path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" /><path d="M19 17v4M17 19h4" /></>);
-const KeyRound = mk(<><circle cx="8" cy="15" r="4" /><path d="m11 12 9-9M16 7l3 3" /></>);
 const ArrowLeft = mk(<path d="M19 12H5M12 19l-7-7 7-7" />);
 
 // ---------- Marca ----------
@@ -119,11 +125,12 @@ function ZyraMark({ className }: IconProps) {
   );
 }
 
-// ---------- Órdenes "en vivo" del panel izquierdo (vista previa decorativa del producto) ----------
+// ---------- Órdenes "en vivo" del panel izquierdo (vista previa decorativa) ----------
+// El color de cada estado sale de variables CSS con un tono distinto por tema, para mantener contraste.
 const STATUS = [
-  { label: 'Pendiente', color: '#F59E0B' },
-  { label: 'En proceso', color: '#8B5CF6' },
-  { label: 'Completada', color: '#22C55E' },
+  { label: 'Pendiente', color: 'var(--st-pending)' },
+  { label: 'En proceso', color: 'var(--st-progress)' },
+  { label: 'Completada', color: 'var(--st-done)' },
 ];
 
 const INITIAL_ORDERS = [
@@ -133,56 +140,59 @@ const INITIAL_ORDERS = [
 ];
 
 // ---------- Estilos (variables de tema + utilidades propias) ----------
+// Tema: sin data-theme en <html> manda el dispositivo; con data-theme='light'|'dark' manda el botón.
+const DARK = `
+  --bg:#0F0F15; --card:#1B1C25; --text:#F3F3F5; --muted:#A3A6B3; --faint:#8A8D9A;
+  --line:#34363F; --field:rgba(9,9,11,.8); --field-solid:#09090B; --field-line:#27272A; --field-text:#FFFFFF; --field-alt:#292B33;
+  --panel:#15151E; --panel-text:#FFFFFF; --panel-muted:#B8BBC7; --panel-card:#20212B; --panel-line:#3A3C47; --grid:rgba(255,255,255,.05);
+  --st-pending:#FBBF24; --st-progress:#A78BFA; --st-done:#4ADE80;
+  --err:#FF6B66; --shadow:0 30px 70px -20px rgba(0,0,0,.7);
+`;
+
 const STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap');
 
 .zl-root{
-  --bg:#F3F3F5; --card:#FFFFFF; --text:#15151E; --muted:#5F626E; --faint:#9A9CA8;
-  --line:#DFE0E6; --field:#FFFFFF; --field-alt:#F3F3F5;
-  --panel:#F3F3F5; --panel-text:#15151E; --panel-muted:#5F626E; --panel-card:#FFFFFF; --grid:rgba(21,21,30,.05);
-  --shadow:0 30px 60px -20px rgba(21,21,30,.25);
+  --bg:#F3F3F5; --card:#FFFFFF; --text:#15151E; --muted:#5F626E; --faint:#7B7E8B;
+  --line:#DFE0E6; --field:#FFFFFF; --field-solid:#FFFFFF; --field-line:#D4D4D8; --field-text:#15151E; --field-alt:#F3F3F5;
+  --panel:#F3F3F5; --panel-text:#15151E; --panel-muted:#4B4E5A; --panel-card:#FFFFFF; --panel-line:#DFE0E6; --grid:rgba(21,21,30,.06);
+  --st-pending:#B45309; --st-progress:#6D28D9; --st-done:#15803D;
+  --err:#DC2626; --shadow:0 30px 60px -20px rgba(21,21,30,.25);
   background:var(--bg); color:var(--text); font-family:Inter,system-ui,sans-serif;
   transition:background-color .3s ease,color .3s ease;
 }
-.zl-root[data-theme='dark']{
-  --bg:#0F0F15; --card:#1B1C25; --text:#F3F3F5; --muted:#A3A6B3; --faint:#6E7180;
-  --line:#34363F; --field:#15151E; --field-alt:#292B33;
-  --panel:#15151E; --panel-text:#FFFFFF; --panel-muted:#A3A6B3; --panel-card:#20212B; --grid:rgba(255,255,255,.04);
-  --shadow:0 30px 70px -20px rgba(0,0,0,.7);
-}
+@media (prefers-color-scheme:dark){:root:not([data-theme='light']) .zl-root{${DARK}}}
+:root[data-theme='dark'] .zl-root{${DARK}}
+
 .zl-head{font-family:Montserrat,Inter,system-ui,sans-serif;}
 .zl-card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);transition:background-color .3s,border-color .3s;}
 .zl-muted{color:var(--muted);}
 .zl-faint{color:var(--faint);}
 .zl-label{display:block;font-size:.8125rem;font-weight:600;margin-bottom:.375rem;color:var(--text);}
-.zl-field{display:flex;align-items:center;border:1px solid var(--line);background:var(--field);border-radius:12px;padding:0 .75rem;transition:border-color .2s,box-shadow .2s,background-color .3s;overflow:hidden;}
-.zl-field:focus-within{border-color:#E10600;box-shadow:0 0 0 3px rgba(225,6,0,.18);}
-.zl-field[data-invalid='true']{border-color:#E10600;}
-.zl-field input{width:100%;background:transparent;outline:none;border:0;color:var(--text);padding:.8rem .6rem;font-size:.875rem;}
+
+/* Inputs: borde visible al enfocar (red-500 + anillo de 1px) */
+.zl-field{display:flex;align-items:center;border:1px solid var(--field-line);background:var(--field);border-radius:12px;padding:0 .75rem;transition:border-color .2s,box-shadow .2s,background-color .3s;overflow:hidden;}
+.zl-field:focus-within{border-color:#EF4444;box-shadow:0 0 0 1px #EF4444;}
+.zl-field[data-invalid='true']{border-color:#EF4444;}
+.zl-field input{width:100%;background:transparent;outline:none;border:0;color:var(--field-text);padding:.8rem .6rem;font-size:.875rem;}
 .zl-field input::placeholder{color:var(--faint);}
 .zl-field input:disabled{opacity:.6;}
-.zl-field input:-webkit-autofill{-webkit-text-fill-color:var(--text);box-shadow:0 0 0 40px var(--field) inset;caret-color:var(--text);}
-.zl-suffix{align-self:stretch;display:flex;align-items:center;margin:0 -.75rem 0 .25rem;padding:0 .875rem;font-size:.8125rem;color:var(--muted);background:var(--field-alt);border-left:1px solid var(--line);white-space:nowrap;}
-.zl-btn{display:flex;width:100%;align-items:center;justify-content:center;gap:.5rem;border-radius:12px;padding:.85rem 1rem;font-weight:700;font-size:.9rem;transition:background-color .2s,transform .1s,opacity .2s,border-color .2s;cursor:pointer;}
+.zl-field input:-webkit-autofill{-webkit-text-fill-color:var(--field-text);box-shadow:0 0 0 40px var(--field-solid) inset;caret-color:var(--field-text);}
+
+.zl-btn{display:flex;width:100%;align-items:center;justify-content:center;gap:.5rem;border-radius:12px;padding:.8rem 1rem;font-size:.9rem;transition:background-color .2s,transform .1s,opacity .2s,border-color .2s;cursor:pointer;}
 .zl-btn:active:not(:disabled){transform:scale(.99);}
 .zl-btn:disabled{opacity:.6;cursor:not-allowed;}
-.zl-primary{background:#E10600;color:#fff;box-shadow:0 8px 20px -8px rgba(225,6,0,.6);}
-.zl-primary:hover:not(:disabled){background:#A80703;}
-.zl-secondary{background:transparent;color:var(--text);border:1px solid var(--line);}
+.zl-secondary{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:700;}
 .zl-secondary:hover:not(:disabled){background:var(--field-alt);}
 .zl-link{font-weight:700;color:var(--text);transition:color .2s;cursor:pointer;background:none;border:0;padding:0;}
-.zl-link:hover{color:#E10600;}
-.zl-root :focus-visible{outline:2px solid #E10600;outline-offset:2px;}
+.zl-link:hover{color:#EF4444;}
+.zl-root :focus-visible{outline:2px solid #EF4444;outline-offset:2px;}
 .zl-field input:focus-visible{outline:none;}
-.zl-seg{display:inline-flex;padding:3px;gap:2px;border-radius:10px;border:1px solid var(--line);background:var(--field-alt);}
-.zl-seg button{display:grid;place-items:center;width:30px;height:28px;border-radius:7px;color:var(--muted);transition:background-color .2s,color .2s;}
-.zl-seg button[aria-checked='true']{background:#E10600;color:#fff;}
-.zl-seg button:not([aria-checked='true']):hover{color:var(--text);}
-.zl-otp{width:2.75rem;height:3.25rem;text-align:center;font-size:1.25rem;font-weight:700;border-radius:12px;border:1px solid var(--line);background:var(--field);color:var(--text);outline:none;transition:border-color .2s,box-shadow .2s;}
-.zl-otp:focus{border-color:#E10600;box-shadow:0 0 0 3px rgba(225,6,0,.18);}
-.zl-chip{display:inline-flex;align-items:center;gap:.35rem;border-radius:999px;padding:.15rem .55rem;font-size:.6875rem;font-weight:600;transition:background-color .5s,color .5s;white-space:nowrap;}
-.zl-error{border:1px solid rgba(225,6,0,.35);background:rgba(225,6,0,.08);color:#E10600;border-radius:12px;padding:.6rem .75rem;font-size:.8125rem;}
-.zl-root[data-theme='dark'] .zl-error{color:#FF6B66;}
+
+.zl-otp{width:2.75rem;height:3.25rem;text-align:center;font-size:1.25rem;font-weight:700;border-radius:12px;border:1px solid var(--field-line);background:var(--field);color:var(--field-text);outline:none;transition:border-color .2s,box-shadow .2s;}
+.zl-otp:focus{border-color:#EF4444;box-shadow:0 0 0 1px #EF4444;}
+.zl-chip{display:inline-flex;align-items:center;gap:.35rem;border-radius:999px;padding:.15rem .55rem;font-size:.6875rem;font-weight:600;transition:background-color .5s,color .5s;white-space:nowrap;background:color-mix(in srgb,currentColor 16%,transparent);}
+.zl-error{border:1px solid rgba(220,38,38,.4);background:rgba(220,38,38,.08);color:var(--err);border-radius:12px;padding:.6rem .75rem;font-size:.8125rem;}
 @keyframes zl-shake{10%,90%{transform:translateX(-1px)}20%,80%{transform:translateX(3px)}30%,50%,70%{transform:translateX(-5px)}40%,60%{transform:translateX(5px)}}
 .zl-shake{animation:zl-shake .45s cubic-bezier(.36,.07,.19,.97);}
 @keyframes zl-pop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
@@ -196,23 +206,17 @@ const STYLES = `
 
 export default function ZyraLogin() {
   const router = useRouter();
+  const params = useParams<{ locale?: string }>();
+  const locale = params?.locale || 'es';
   // Una sola referencia estable al cliente de navegador (@supabase/ssr) durante la vida del componente.
   const supabase = useMemo(() => createClient(), []);
 
-  // ----- Tema -----
-  const [theme, setTheme] = useState<Theme>('system');
-  const [systemDark, setSystemDark] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  const resolvedTheme = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
-
   // ----- Formulario -----
   const [step, setStep] = useState<Step>('credentials');
-  const [mode, setMode] = useState<Mode>('password');
-  const [workspace, setWorkspace] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [remember, setRemember] = useState(false);
   const [capsLockOn, setCapsLockOn] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -232,39 +236,8 @@ export default function ZyraLogin() {
   const [orders, setOrders] = useState(INITIAL_ORDERS);
 
   const emailIsValid = email === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  const workspaceIsValid = workspace.length >= 3;
   const secondsLeft = Math.max(0, Math.ceil((lockedUntil - now) / 1000));
   const isLocked = secondsLeft > 0;
-
-  // Carga inicial: tema guardado, último taller y preferencia del sistema
-  useEffect(() => {
-    try {
-      const savedTheme = localStorage.getItem(THEME_KEY) as Theme | null;
-      if (savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'system') setTheme(savedTheme);
-      const savedWs = localStorage.getItem(WORKSPACE_KEY);
-      if (savedWs) {
-        setWorkspace(savedWs);
-        setRemember(true);
-      }
-    } catch {
-      /* localStorage no disponible */
-    }
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    setSystemDark(mq.matches);
-    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
-    mq.addEventListener('change', onChange);
-    setMounted(true);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-
-  const changeTheme = (t: Theme) => {
-    setTheme(t);
-    try {
-      localStorage.setItem(THEME_KEY, t);
-    } catch {
-      /* ignorar */
-    }
-  };
 
   // Cuenta regresiva del bloqueo
   useEffect(() => {
@@ -279,6 +252,34 @@ export default function ZyraLogin() {
     }, 500);
     return () => clearInterval(id);
   }, [lockedUntil]);
+
+  // Si /auth/callback falló (enlace vencido o inválido), explica por qué.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('error')) {
+      setError('El enlace es inválido o ya venció. Intenta de nuevo.');
+    }
+  }, []);
+
+  // Si ya hay sesión a medias (falta el 2.º factor), retoma el paso del código.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (!active || !aal) return;
+      if (aal.nextLevel === 'aal2' && aal.currentLevel !== 'aal2') {
+        const { data: factors } = await supabase.auth.mfa.listFactors();
+        const totp = factors?.totp?.[0];
+        if (!active || !totp) return;
+        mfaFactorId.current = totp.id;
+        setOtp(Array(6).fill(''));
+        setStep('otp');
+        setTimeout(() => otpRefs.current[0]?.focus(), 50);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [supabase]);
 
   // Órdenes en vivo: cada 2.8 s una orden avanza de estado
   useEffect(() => {
@@ -309,18 +310,9 @@ export default function ZyraLogin() {
     setCapsLockOn(e.getModifierState && e.getModifierState('CapsLock'));
   };
 
-  const persistWorkspace = () => {
-    try {
-      if (remember) localStorage.setItem(WORKSPACE_KEY, workspace);
-      else localStorage.removeItem(WORKSPACE_KEY);
-    } catch {
-      /* ignorar */
-    }
-  };
-
   const finishLogin = () => {
     setStep('success');
-    router.replace(POST_LOGIN_PATH);
+    router.replace(`/${locale}${POST_LOGIN_PATH}`);
     router.refresh();
   };
 
@@ -334,8 +326,8 @@ export default function ZyraLogin() {
       fail(`Demasiados intentos. Intenta de nuevo en ${secondsLeft} s.`);
       return;
     }
-    if (!workspace || !email || (mode === 'password' && !password)) {
-      fail(mode === 'password' ? 'Ingresa tu taller, correo y contraseña para continuar.' : 'Ingresa tu taller y correo para continuar.');
+    if (!email || !password) {
+      fail('Ingresa tu correo y contraseña para continuar.');
       return;
     }
     if (!emailIsValid) {
@@ -345,26 +337,8 @@ export default function ZyraLogin() {
 
     setLoading(true);
     try {
-      // ----- Enlace mágico -----
-      if (mode === 'magic') {
-        const { error: otpError } = await supabase.auth.signInWithOtp({
-          email,
-          options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
-            shouldCreateUser: false, // el login no debe registrar cuentas nuevas
-          },
-        });
-        if (otpError) {
-          fail(authMessage(otpError));
-          return;
-        }
-        persistWorkspace();
-        setStep('magic-sent');
-        return;
-      }
-
       // ----- Contraseña -----
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (signInError) {
         // Solo las credenciales incorrectas cuentan para el bloqueo visual.
         if (signInError.code === 'invalid_credentials') {
@@ -385,7 +359,6 @@ export default function ZyraLogin() {
       }
 
       setAttempts(0);
-      persistWorkspace();
 
       // ¿La cuenta exige segundo factor?
       const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
@@ -421,6 +394,105 @@ export default function ZyraLogin() {
     }
   };
 
+  // Registro con correo y contraseña. signUp guarda la contraseña (hasheada) en auth.users,
+  // así "¿Olvidaste tu contraseña?" funciona con cuentas creadas por aquí.
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+    setError('');
+
+    if (!email || !password || !confirmPassword) {
+      fail('Completa correo y contraseña para continuar.');
+      return;
+    }
+    if (!emailIsValid) {
+      fail('Revisa el formato de tu correo electrónico.');
+      return;
+    }
+    if (password.length < MIN_PASSWORD) {
+      fail(`La contraseña debe tener al menos ${MIN_PASSWORD} caracteres.`);
+      return;
+    }
+    if (password !== confirmPassword) {
+      fail('Las contraseñas no coinciden.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          // Si la confirmación de correo está activa, el enlace termina en el onboarding.
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=/${locale}/onboarding`,
+        },
+      });
+
+      if (signUpError) {
+        fail(authMessage(signUpError));
+        return;
+      }
+
+      // Con confirmación activa, Supabase NO devuelve error si el correo ya existe:
+      // devuelve un usuario "ofuscado" con identities vacío. Lo detectamos aquí.
+      if (data.user && (data.user.identities?.length ?? 0) === 0) {
+        fail('Ya existe una cuenta con ese correo. Inicia sesión o recupera tu contraseña.');
+        return;
+      }
+
+      // Confirmación desactivada: ya hay sesión -> directo a registrar el taller.
+      if (data.session) {
+        setStep('success');
+        router.replace(`/${locale}/onboarding`);
+        router.refresh();
+        return;
+      }
+
+      // Confirmación activada: hay que abrir el correo.
+      setPassword('');
+      setConfirmPassword('');
+      setStep('signup-sent');
+    } catch (err) {
+      fail(toMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Recuperar contraseña: Supabase manda un correo con un enlace que pasa por /auth/callback
+  // (crea la sesión de recuperación) y termina en la página de nueva contraseña.
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+    setError('');
+
+    if (!email) {
+      fail('Ingresa tu correo para continuar.');
+      return;
+    }
+    if (!emailIsValid) {
+      fail('Revisa el formato de tu correo electrónico.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/auth/callback?next=/${locale}/reset-password`,
+      });
+      if (resetError) {
+        fail(authMessage(resetError));
+        return;
+      }
+      setStep('forgot-sent');
+    } catch (err) {
+      fail(toMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Ingreso con Google (Supabase OAuth).
   // Si todo sale bien, el navegador se va a Google y luego vuelve a /auth/callback,
   // por eso no apagamos el "loading" en el caso exitoso.
@@ -428,7 +500,6 @@ export default function ZyraLogin() {
     if (loading) return;
     setLoading(true);
     setError('');
-    persistWorkspace();
 
     try {
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
@@ -523,14 +594,12 @@ export default function ZyraLogin() {
     setStep('credentials');
     setError('');
     setPassword('');
+    setConfirmPassword('');
   };
 
   // ---------- Render ----------
   return (
-    <div
-      className="zl-root min-h-screen flex items-center justify-center p-4"
-      data-theme={mounted ? resolvedTheme : 'light'}
-    >
+    <div className="zl-root min-h-screen flex items-center justify-center p-4">
       <style>{STYLES}</style>
 
       <div className="zl-card w-full max-w-4xl rounded-2xl flex overflow-hidden">
@@ -566,7 +635,7 @@ export default function ZyraLogin() {
               </div>
 
               <div className="max-w-[290px]">
-                <h1 className="zl-head font-extrabold text-[1.9rem] leading-[1.15] mb-3">
+                <h1 className="zl-head font-extrabold text-[1.9rem] leading-[1.15] mb-3" style={{ color: 'var(--panel-text)' }}>
                   Tu taller,
                   <br />
                   bajo control total.
@@ -579,11 +648,11 @@ export default function ZyraLogin() {
               {/* Órdenes en vivo */}
               <div
                 className="mt-7 rounded-xl p-3.5 max-w-[300px]"
-                style={{ background: 'var(--panel-card)', border: '1px solid var(--line)' }}
+                style={{ background: 'var(--panel-card)', border: '1px solid var(--panel-line)' }}
                 aria-label="Vista previa de órdenes de servicio en tiempo real"
               >
                 <div className="flex items-center justify-between mb-2.5">
-                  <span className="text-xs font-semibold">Órdenes de servicio</span>
+                  <span className="text-xs font-semibold" style={{ color: 'var(--panel-text)' }}>Órdenes de servicio</span>
                   <span className="text-[0.6875rem]" style={{ color: 'var(--panel-muted)' }}>
                     {inProgress} en proceso · {completed} hoy
                   </span>
@@ -594,13 +663,13 @@ export default function ZyraLogin() {
                     return (
                       <li key={o.id} className="flex items-center justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-xs font-semibold truncate">{o.service}</p>
+                          <p className="text-xs font-semibold truncate" style={{ color: 'var(--panel-text)' }}>{o.service}</p>
                           <p className="text-[0.6875rem] truncate" style={{ color: 'var(--panel-muted)' }}>
                             #{o.id} {o.car}
                           </p>
                         </div>
-                        <span className="zl-chip" style={{ background: `${s.color}26`, color: s.color }}>
-                          <span className="w-1.5 h-1.5 rounded-full" style={{ background: s.color }} />
+                        <span className="zl-chip" style={{ color: s.color }}>
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'currentColor' }} />
                           {s.label}
                         </span>
                       </li>
@@ -628,63 +697,23 @@ export default function ZyraLogin() {
 
         {/* ---------- Panel derecho ---------- */}
         <div className="w-full md:w-[54%] p-7 sm:p-11 flex flex-col justify-center min-h-[620px]">
-          {/* Barra superior: logo móvil + selector de tema */}
+          {/* Barra superior: logo móvil + botón de tema (el mismo en todas las páginas) */}
           <div className="flex items-center justify-between mb-7">
             <div className="flex items-center gap-2 md:invisible">
               <ZyraMark className="w-8 h-5" />
               <span className="zl-head font-bold text-lg">Zyra</span>
             </div>
-            <div className="zl-seg" role="radiogroup" aria-label="Tema de la interfaz">
-              {([
-                ['light', Sun, 'Claro'],
-                ['dark', Moon, 'Oscuro'],
-                ['system', Monitor, 'Sistema'],
-              ] as const).map(([value, Icon, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="radio"
-                  aria-checked={theme === value}
-                  aria-label={label}
-                  title={label}
-                  onClick={() => changeTheme(value)}
-                >
-                  <Icon className="w-4 h-4" />
-                </button>
-              ))}
-            </div>
+            <ThemeToggle />
           </div>
 
           {/* ===== Paso: credenciales ===== */}
           {step === 'credentials' && (
             <>
               <h2 className="zl-head font-bold text-[1.7rem] mb-1.5">Inicia sesión</h2>
-              <p className="zl-muted text-sm mb-7">
-                {mode === 'password' ? 'Ingresa a tu panel de control operativo.' : 'Te enviamos un enlace al correo para entrar sin contraseña.'}
-              </p>
+              <p className="zl-muted text-sm mb-7">Ingresa a tu panel de control operativo.</p>
 
               <form onSubmit={handleSubmit} noValidate className={shake ? 'zl-shake' : ''}>
                 <div className="space-y-4">
-                  {/* Taller */}
-                  <div>
-                    <label htmlFor="workspace" className="zl-label">Tu taller</label>
-                    <div className="zl-field" data-invalid={false}>
-                      <input
-                        id="workspace"
-                        type="text"
-                        autoComplete="organization"
-                        value={workspace}
-                        onChange={(e) => setWorkspace(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-{2,}/g, '-'))}
-                        placeholder="taller-hermanos-lopez"
-                        disabled={loading}
-                      />
-                      <span className="zl-suffix ml-2">.zyra.app</span>
-                    </div>
-                    {workspaceIsValid && (
-                      <p className="text-xs mt-1.5 zl-faint">Ingresarás a {workspace}.zyra.app</p>
-                    )}
-                  </div>
-
                   {/* Correo */}
                   <div>
                     <label htmlFor="email" className="zl-label">Correo electrónico</label>
@@ -700,42 +729,52 @@ export default function ZyraLogin() {
                         disabled={loading}
                       />
                     </div>
-                    {!emailIsValid && <p className="text-xs mt-1.5" style={{ color: '#E10600' }}>Ese correo no parece válido.</p>}
+                    {!emailIsValid && <p className="text-xs mt-1.5" style={{ color: 'var(--err)' }}>Ese correo no parece válido.</p>}
                   </div>
 
                   {/* Contraseña */}
-                  {mode === 'password' && (
-                    <div>
-                      <label htmlFor="password" className="zl-label">Contraseña</label>
-                      <div className="zl-field">
-                        <Lock className="w-4 h-4 zl-faint shrink-0" />
-                        <input
-                          id="password"
-                          type={showPassword ? 'text' : 'password'}
-                          autoComplete="current-password"
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          onKeyUp={handleKeyEvent}
-                          onKeyDown={handleKeyEvent}
-                          placeholder="••••••••"
-                          disabled={loading}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword((v) => !v)}
-                          className="zl-faint hover:opacity-80 transition-opacity"
-                          aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                        >
-                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                      {capsLockOn && (
-                        <p className="flex items-center gap-1.5 text-xs text-amber-500 mt-1.5">
-                          <AlertTriangle className="w-3.5 h-3.5" /> Bloq Mayús está activado.
-                        </p>
-                      )}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label htmlFor="password" className="zl-label !mb-0">Contraseña</label>
+                      <button
+                        type="button"
+                        className="zl-link text-xs"
+                        onClick={() => {
+                          setError('');
+                          setStep('forgot');
+                        }}
+                      >
+                        ¿Olvidaste tu contraseña?
+                      </button>
                     </div>
-                  )}
+                    <div className="zl-field">
+                      <Lock className="w-4 h-4 zl-faint shrink-0" />
+                      <input
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        autoComplete="current-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        onKeyUp={handleKeyEvent}
+                        onKeyDown={handleKeyEvent}
+                        placeholder="••••••••"
+                        disabled={loading}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        className="zl-faint hover:opacity-80 transition-opacity"
+                        aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    {capsLockOn && (
+                      <p className="flex items-center gap-1.5 text-xs text-amber-500 mt-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5" /> Bloq Mayús está activado.
+                      </p>
+                    )}
+                  </div>
 
                   {error && (
                     <div className="zl-error" role="alert">
@@ -743,53 +782,21 @@ export default function ZyraLogin() {
                     </div>
                   )}
 
-                  <div className="flex justify-between items-center text-sm pt-0.5">
-                    <label className="flex items-center gap-2 zl-muted cursor-pointer font-medium select-none">
-                      <input
-                        type="checkbox"
-                        checked={remember}
-                        onChange={(e) => setRemember(e.target.checked)}
-                        className="w-4 h-4 rounded accent-[#E10600]"
-                      />
-                      Recordar mi taller
-                    </label>
-                    {mode === 'password' && (
-                      <a href="#" className="zl-link text-sm">¿Olvidaste tu contraseña?</a>
-                    )}
-                  </div>
-
-                  <button type="submit" disabled={loading || isLocked} className="zl-btn zl-primary">
+                  {/* Botón primario */}
+                  <button
+                    type="submit"
+                    disabled={loading || isLocked}
+                    className="zl-btn bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl py-3 shadow-lg shadow-red-600/25"
+                  >
                     {loading ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        {mode === 'password' ? 'Verificando credenciales…' : 'Enviando enlace…'}
+                        Verificando credenciales…
                       </>
                     ) : isLocked ? (
                       `Bloqueado ${secondsLeft} s`
-                    ) : mode === 'password' ? (
+                    ) : (
                       'Ingresar al sistema'
-                    ) : (
-                      'Enviar enlace de acceso'
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMode(mode === 'password' ? 'magic' : 'password');
-                      setError('');
-                    }}
-                    className="zl-btn zl-secondary"
-                    disabled={loading}
-                  >
-                    {mode === 'password' ? (
-                      <>
-                        <Sparkles className="w-4 h-4" /> Entrar con enlace al correo
-                      </>
-                    ) : (
-                      <>
-                        <KeyRound className="w-4 h-4" /> Usar contraseña
-                      </>
                     )}
                   </button>
 
@@ -799,7 +806,13 @@ export default function ZyraLogin() {
                     <div className="flex-1 h-px" style={{ background: 'var(--line)' }} />
                   </div>
 
-                  <button type="button" onClick={handleGoogleLogin} disabled={loading} className="zl-btn zl-secondary">
+                  {/* Botón Google: claro/neutro en ambos temas */}
+                  <button
+                    type="button"
+                    onClick={handleGoogleLogin}
+                    disabled={loading}
+                    className="zl-btn bg-white text-zinc-900 hover:bg-zinc-100 font-medium border border-zinc-200 rounded-xl py-3"
+                  >
                     <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
                       <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
                       <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.99.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
@@ -811,23 +824,200 @@ export default function ZyraLogin() {
 
                   <p className="text-center text-sm zl-muted pt-1">
                     ¿Nuevo en Zyra?{' '}
-                    <a href="#" className="zl-link">Solicita una demo</a>
+                    <button
+                      type="button"
+                      className="zl-link"
+                      onClick={() => {
+                        setError('');
+                        setPassword('');
+                        setConfirmPassword('');
+                        setStep('signup');
+                      }}
+                    >
+                      Crear cuenta con correo
+                    </button>
                   </p>
                 </div>
               </form>
             </>
           )}
 
-          {/* ===== Paso: enlace enviado ===== */}
-          {step === 'magic-sent' && (
+          {/* ===== Paso: crear cuenta con correo y contraseña ===== */}
+          {step === 'signup' && (
+            <>
+              <h2 className="zl-head font-bold text-[1.7rem] mb-1.5">Crea tu cuenta</h2>
+              <p className="zl-muted text-sm mb-7">
+                Regístrate con tu correo. En el siguiente paso registrarás tu taller.
+              </p>
+
+              <form onSubmit={handleSignUp} noValidate className={shake ? 'zl-shake' : ''}>
+                <div className="space-y-4">
+                  <div>
+                    <label htmlFor="signup-email" className="zl-label">Correo electrónico</label>
+                    <div className="zl-field" data-invalid={!emailIsValid}>
+                      <Mail className="w-4 h-4 zl-faint shrink-0" />
+                      <input
+                        id="signup-email"
+                        type="email"
+                        autoComplete="email"
+                        autoFocus
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="taller@ejemplo.com"
+                        disabled={loading}
+                      />
+                    </div>
+                    {!emailIsValid && <p className="text-xs mt-1.5" style={{ color: 'var(--err)' }}>Ese correo no parece válido.</p>}
+                  </div>
+
+                  <div>
+                    <label htmlFor="signup-password" className="zl-label">Contraseña</label>
+                    <div className="zl-field">
+                      <Lock className="w-4 h-4 zl-faint shrink-0" />
+                      <input
+                        id="signup-password"
+                        type={showPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        onKeyUp={handleKeyEvent}
+                        onKeyDown={handleKeyEvent}
+                        placeholder={`Mínimo ${MIN_PASSWORD} caracteres`}
+                        disabled={loading}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        className="zl-faint hover:opacity-80 transition-opacity"
+                        aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    {capsLockOn && (
+                      <p className="flex items-center gap-1.5 text-xs text-amber-500 mt-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5" /> Bloq Mayús está activado.
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label htmlFor="signup-confirm" className="zl-label">Confirma tu contraseña</label>
+                    <div className="zl-field" data-invalid={confirmPassword !== '' && confirmPassword !== password}>
+                      <Lock className="w-4 h-4 zl-faint shrink-0" />
+                      <input
+                        id="signup-confirm"
+                        type={showPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="Repite la contraseña"
+                        disabled={loading}
+                      />
+                    </div>
+                  </div>
+
+                  {error && <div className="zl-error" role="alert">{error}</div>}
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="zl-btn bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl py-3 shadow-lg shadow-red-600/25"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" /> Creando cuenta…
+                      </>
+                    ) : (
+                      'Crear cuenta'
+                    )}
+                  </button>
+                  <button type="button" className="zl-btn zl-secondary" onClick={backToCredentials} disabled={loading}>
+                    <ArrowLeft className="w-4 h-4" /> Ya tengo cuenta
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
+
+          {/* ===== Paso: confirma tu correo ===== */}
+          {step === 'signup-sent' && (
             <div className="text-center">
-              <div className="mx-auto mb-5 grid place-items-center w-14 h-14 rounded-2xl zl-pop" style={{ background: 'rgba(225,6,0,.12)', color: '#E10600' }}>
+              <div className="mx-auto mb-5 grid place-items-center w-14 h-14 rounded-2xl zl-pop" style={{ background: 'rgba(225,6,0,.12)', color: '#EF4444' }}>
+                <Mail className="w-7 h-7" />
+              </div>
+              <h2 className="zl-head font-bold text-[1.5rem] mb-2">Confirma tu correo</h2>
+              <p className="zl-muted text-sm mb-1">Te enviamos un enlace de confirmación a</p>
+              <p className="font-semibold text-sm mb-4 break-all">{email}</p>
+              <p className="zl-faint text-xs mb-6">
+                Ábrelo para continuar con el registro de tu taller. Si no lo ves, revisa spam.
+              </p>
+              <button type="button" className="zl-btn zl-secondary" onClick={backToCredentials}>
+                <ArrowLeft className="w-4 h-4" /> Volver al inicio de sesión
+              </button>
+            </div>
+          )}
+
+          {/* ===== Paso: recuperar contraseña ===== */}
+          {step === 'forgot' && (
+            <>
+              <h2 className="zl-head font-bold text-[1.7rem] mb-1.5">Recupera tu contraseña</h2>
+              <p className="zl-muted text-sm mb-7">Escribe tu correo y te enviaremos un enlace para crear una contraseña nueva.</p>
+
+              <form onSubmit={handleForgot} noValidate className={shake ? 'zl-shake' : ''}>
+                <div className="space-y-4">
+                  <div>
+                    <label htmlFor="forgot-email" className="zl-label">Correo electrónico</label>
+                    <div className="zl-field" data-invalid={!emailIsValid}>
+                      <Mail className="w-4 h-4 zl-faint shrink-0" />
+                      <input
+                        id="forgot-email"
+                        type="email"
+                        autoComplete="username"
+                        autoFocus
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="taller@ejemplo.com"
+                        disabled={loading}
+                      />
+                    </div>
+                    {!emailIsValid && <p className="text-xs mt-1.5" style={{ color: 'var(--err)' }}>Ese correo no parece válido.</p>}
+                  </div>
+
+                  {error && <div className="zl-error" role="alert">{error}</div>}
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="zl-btn bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl py-3 shadow-lg shadow-red-600/25"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" /> Enviando enlace…
+                      </>
+                    ) : (
+                      'Enviar enlace de recuperación'
+                    )}
+                  </button>
+                  <button type="button" className="zl-btn zl-secondary" onClick={backToCredentials} disabled={loading}>
+                    <ArrowLeft className="w-4 h-4" /> Volver al inicio de sesión
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
+
+          {/* ===== Paso: enlace de recuperación enviado ===== */}
+          {step === 'forgot-sent' && (
+            <div className="text-center">
+              <div className="mx-auto mb-5 grid place-items-center w-14 h-14 rounded-2xl zl-pop" style={{ background: 'rgba(225,6,0,.12)', color: '#EF4444' }}>
                 <Mail className="w-7 h-7" />
               </div>
               <h2 className="zl-head font-bold text-[1.5rem] mb-2">Revisa tu correo</h2>
-              <p className="zl-muted text-sm mb-1">Enviamos un enlace de acceso a</p>
-              <p className="font-semibold text-sm mb-6 break-all">{email}</p>
-              <p className="zl-faint text-xs mb-6">El enlace funciona una sola vez y caduca en poco tiempo.</p>
+              <p className="zl-muted text-sm mb-1">Si existe una cuenta con</p>
+              <p className="font-semibold text-sm mb-1 break-all">{email}</p>
+              <p className="zl-muted text-sm mb-6">te enviamos un enlace para crear una contraseña nueva.</p>
+              <p className="zl-faint text-xs mb-6">Si no lo ves, revisa la carpeta de spam. El enlace caduca en poco tiempo.</p>
               <button type="button" className="zl-btn zl-secondary" onClick={backToCredentials}>
                 <ArrowLeft className="w-4 h-4" /> Volver al inicio de sesión
               </button>
@@ -837,7 +1027,7 @@ export default function ZyraLogin() {
           {/* ===== Paso: verificación en dos pasos ===== */}
           {step === 'otp' && (
             <div className={shake ? 'zl-shake' : ''}>
-              <div className="mb-5 grid place-items-center w-12 h-12 rounded-xl" style={{ background: 'rgba(225,6,0,.12)', color: '#E10600' }}>
+              <div className="mb-5 grid place-items-center w-12 h-12 rounded-xl" style={{ background: 'rgba(225,6,0,.12)', color: '#EF4444' }}>
                 <ShieldCheck className="w-6 h-6" />
               </div>
               <h2 className="zl-head font-bold text-[1.6rem] mb-1.5">Verificación en dos pasos</h2>
@@ -866,7 +1056,12 @@ export default function ZyraLogin() {
 
               {error && <div className="zl-error mb-4" role="alert">{error}</div>}
 
-              <button type="button" className="zl-btn zl-primary mb-3" disabled={loading || otp.some((d) => !d)} onClick={() => submitOtp(otp)}>
+              <button
+                type="button"
+                className="zl-btn bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl py-3 mb-3"
+                disabled={loading || otp.some((d) => !d)}
+                onClick={() => submitOtp(otp)}
+              >
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" /> Verificando…
@@ -888,11 +1083,9 @@ export default function ZyraLogin() {
                 <Check className="w-8 h-8" />
               </div>
               <h2 className="zl-head font-bold text-[1.6rem] mb-2">Bienvenido de vuelta</h2>
-              <p className="zl-muted text-sm mb-6">
-                Entrando a <span className="font-semibold" style={{ color: 'var(--text)' }}>{workspace || 'tu taller'}.zyra.app</span>
-              </p>
+              <p className="zl-muted text-sm mb-6">Entrando a tu panel…</p>
               <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--field-alt)' }}>
-                <div className="h-full rounded-full bg-[#E10600] zl-progress" />
+                <div className="h-full rounded-full bg-red-600 zl-progress" />
               </div>
             </div>
           )}

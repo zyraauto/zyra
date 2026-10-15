@@ -1,340 +1,564 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { ArrowLeft, ArrowRight, Check, Cog, Gauge, Loader2, PaintBucket, Wrench, Zap } from 'lucide-react';
-import { supabase } from '@/lib/supabaseClient';
-import ThemeToggle, { ThemeSync } from '@/components/ThemeToggle';
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { CircleNotchIcon, WrenchIcon } from "@phosphor-icons/react";
+import { Button } from "@/components/ui/button";
+import { CardDescription, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import ThemeToggle from "@/components/ThemeToggle";
+import { provisionTenant, type ProvisionTenantField } from "@/app/actions/workshop";
+import { useAuthStore } from "@/stores/auth.store";
 
-// Registro del taller en 3 pasos. La validación real vive en la función SQL create_workshop.
+type FormState = {
+  name: string;
+  slug: string;
+  phone: string;
+  postalCode: string; // va a workshops.postal_code
+  colony: string; // solo UI: se une a la dirección (calle + colonia) al enviar
+  address: string; // calle y número
+  city: string;
+  state: string;
+  ownerFirstName: string;
+  ownerLastName: string;
+};
 
-const SPECIALTIES = [
-  { value: 'mecanica_general', label: 'Mecánica general', icon: Wrench },
-  { value: 'afinacion', label: 'Afinación y servicios', icon: Gauge },
-  { value: 'electrico', label: 'Taller eléctrico', icon: Zap },
-  { value: 'hojalateria', label: 'Hojalatería y pintura', icon: PaintBucket },
-  { value: 'transmisiones', label: 'Transmisiones', icon: Cog },
-] as const;
+type FieldErrors = Partial<Record<ProvisionTenantField, string>>;
+type CpStatus = "idle" | "loading" | "ok" | "error";
+// Respuesta de /api/cp/:cp (ver route.ts): éxito { error:false, ... } o fallo { error:true, manual:true }.
+type CpResponse =
+  | { error: false; cp: string; estado: string; municipio: string; ciudad: string; colonias: string[] }
+  | { error: true; code?: string; manual?: boolean };
 
-// Mismo catálogo de ejemplo que el documento del proyecto; luego sembrará la tabla `services`.
-const SERVICES = [
-  ['cambio_aceite', 'Cambio de aceite'], ['afinacion', 'Afinación'], ['frenos', 'Cambio de frenos'],
-  ['bateria', 'Cambio de batería'], ['diagnostico', 'Diagnóstico electrónico'], ['suspension', 'Suspensión'],
-  ['alineacion', 'Alineación y balanceo'], ['clutch', 'Cambio de clutch'], ['aire', 'Aire acondicionado'],
-] as const;
+const MANUAL_COLONY = "__manual__";
 
-const INCLUDED = ['Clientes y vehículos', 'Órdenes de servicio', 'Cotizaciones y ventas', 'Inventario y refacciones', 'Historial por vehículo', 'Perfil público del taller', 'Usuarios y roles'];
-const STEP_TITLES = ['Tu negocio', 'Contacto', 'Servicios'];
+const INITIAL_FORM: FormState = {
+  name: "",
+  slug: "",
+  phone: "",
+  postalCode: "",
+  colony: "",
+  address: "",
+  city: "",
+  state: "",
+  ownerFirstName: "",
+  ownerLastName: "",
+};
 
-const STYLES = `
-.zo{--bg:#F3F3F5;--card:#fff;--text:#15151E;--muted:#5F626E;--line:#DFE0E6;--field:#fff;--soft:#FBE9E8;
-  background:var(--bg);color:var(--text);font-family:var(--font-inter,Inter),system-ui,sans-serif}
-@media (prefers-color-scheme:dark){:root:not([data-theme='light']) .zo{--bg:#0F0F15;--card:#1B1C25;--text:#F3F3F5;--muted:#A3A6B3;--line:#34363F;--field:#15151E;--soft:#2A1618}}
-:root[data-theme='dark'] .zo{--bg:#0F0F15;--card:#1B1C25;--text:#F3F3F5;--muted:#A3A6B3;--line:#34363F;--field:#15151E;--soft:#2A1618}
-.zo-head{font-family:var(--font-montserrat,Montserrat),system-ui,sans-serif}
-.zo-card{background:var(--card);border:1px solid var(--line);box-shadow:0 30px 60px -25px rgba(21,21,30,.35)}
-.zo-muted{color:var(--muted)}
-.zo-in{width:100%;background:var(--field);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:.8rem .9rem;font-size:.9rem;outline:none;transition:border-color .2s,box-shadow .2s}
-.zo-in:focus{border-color:#E10600;box-shadow:0 0 0 3px rgba(225,6,0,.18)}
-.zo-opt{display:flex;align-items:center;gap:.6rem;text-align:left;border:1px solid var(--line);background:var(--field);border-radius:12px;padding:.7rem .85rem;font-size:.85rem;font-weight:600;cursor:pointer;transition:border-color .15s,background-color .15s}
-.zo-opt:hover{border-color:#E10600}
-.zo-opt[aria-checked='true']{border-color:#E10600;background:var(--soft)}
-.zo-btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:12px;padding:.8rem 1.2rem;font-weight:700;font-size:.9rem;cursor:pointer;transition:background-color .2s,opacity .2s}
-.zo-btn:disabled{opacity:.6;cursor:not-allowed}
-.zo-red{background:#E10600;color:#fff}.zo-red:hover:not(:disabled){background:#A80703}
-.zo-ghost{border:1px solid var(--line);color:var(--text)}.zo-ghost:hover:not(:disabled){background:var(--soft)}
-.zo :focus-visible{outline:2px solid #E10600;outline-offset:2px}
-`;
+const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-function ZyraMark({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 48 32" aria-hidden="true">
-      <polygon points="16,0 48,0 41,9 9,9" fill="#E10600" />
-      <polygon points="9,12 37,12 31,20 3,20" fill="#E10600" />
-      <polygon points="3,23 25,23 20,32 0,32" fill="#A80703" />
-    </svg>
-  );
+// Estilos del UI Kit de Zyra (las variantes dark: obedecen a data-theme vía @custom-variant en globals.css)
+const INPUT_CLS =
+  "h-11 rounded-xl border-zinc-200 bg-zinc-100 text-zinc-900 placeholder:text-zinc-400 " +
+  "focus-visible:border-red-600 focus-visible:ring-1 focus-visible:ring-red-600 focus-visible:ring-offset-0 " +
+  "dark:border-zinc-800 dark:bg-[#15151E] dark:text-white dark:placeholder:text-zinc-500 " +
+  "dark:focus-visible:border-red-600 dark:focus-visible:ring-red-600";
+
+// Mismo aspecto que INPUT_CLS pero para <select> nativo.
+const SELECT_CLS =
+  "h-11 w-full rounded-xl border border-zinc-200 bg-zinc-100 px-3 text-sm text-zinc-900 outline-none " +
+  "focus-visible:border-red-600 focus-visible:ring-1 focus-visible:ring-red-600 disabled:opacity-60 " +
+  "dark:border-zinc-800 dark:bg-[#15151E] dark:text-white dark:focus-visible:border-red-600 dark:focus-visible:ring-red-600";
+
+// "Taller Hermanos López" -> "taller-hermanos-lopez"
+function slugify(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/, "");
+}
+
+// Mientras el usuario escribe el subdominio no se recortan los guiones finales (si no, no podría teclear "-").
+function sanitizeSlugInput(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+/, "")
+    .slice(0, 40);
+}
+
+function validate(form: FormState): FieldErrors {
+  const errors: FieldErrors = {};
+  if (form.name.trim().length < 2) errors.name = "Escribe el nombre de tu taller.";
+  const slug = form.slug.replace(/^-+|-+$/g, "");
+  if (slug.length < 3 || !SLUG_RE.test(slug)) {
+    errors.slug = "Usa 3 a 40 caracteres: letras minúsculas, números y guiones.";
+  }
+  if (form.postalCode && form.postalCode.length !== 5) {
+    errors.postalCode = "El código postal debe tener 5 dígitos.";
+  }
+  if (!form.ownerFirstName.trim()) errors.ownerFirstName = "Escribe tu nombre.";
+  if (!form.ownerLastName.trim()) errors.ownerLastName = "Escribe tus apellidos.";
+  return errors;
+}
+
+// "Calle 5 #12, Col. Centro" (el código postal ya NO va aquí: se envía aparte y se guarda en su columna).
+function buildAddress(form: FormState): string {
+  return [form.address.trim(), form.colony.trim() ? `Col. ${form.colony.trim()}` : ""]
+    .filter(Boolean)
+    .join(", ");
 }
 
 export default function OnboardingPage() {
   const router = useRouter();
-  // anon = visitante sin cuenta: primero crea su cuenta; user = ya tiene sesión y solo falta el taller
-  const [auth, setAuth] = useState<'checking' | 'anon' | 'user'>('checking');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [accLoading, setAccLoading] = useState(false);
-  const [accError, setAccError] = useState('');
-  const [sentMsg, setSentMsg] = useState('');
-  const [step, setStep] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState('');
+  const { locale } = useParams<{ locale: string }>();
 
-  const [name, setName] = useState('');
-  const [type, setType] = useState('');
-  const [city, setCity] = useState('');
-  const [phone, setPhone] = useState('');
-  const [services, setServices] = useState<string[]>([]);
+  const user = useAuthStore((s) => s.user);
+  const fetchProfile = useAuthStore((s) => s.fetchProfile);
+  const refreshTenant = useAuthStore((s) => s.refreshTenant);
+  const signOut = useAuthStore((s) => s.signOut);
 
-  // Sin sesión ya no mandamos al login: mostramos "Crea tu cuenta". Con taller registrado -> dashboard.
+  const [form, setForm] = useState<FormState>(INITIAL_FORM);
+  const [slugTouched, setSlugTouched] = useState(false);
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [cpStatus, setCpStatus] = useState<CpStatus>("idle");
+  const [colonias, setColonias] = useState<string[]>([]);
+  // true cuando el usuario eligió "Otra (escribir a mano)" en el <select> de colonias.
+  const [manualColony, setManualColony] = useState(false);
+  const prefilled = useRef(false);
+
+  // Carga el usuario en el store si aún no está (entrada directa a /onboarding o tras Google OAuth).
   useEffect(() => {
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return setAuth('anon');
-      const { data: p } = await supabase.from('profiles').select('workshop_id').eq('id', user.id).maybeSingle();
-      if (p?.workshop_id) return router.replace('/dashboard');
-      setAuth('user');
-    })();
-  }, [router]);
+    if (!useAuthStore.getState().user) void fetchProfile();
+  }, [fetchProfile]);
 
-  const callbackUrl = () => `${window.location.origin}/auth/callback?next=/es/onboarding`;
+  // Precarga nombre y apellidos desde el proveedor (Google). user_metadata se usa solo para mostrar, nunca para autorizar.
+  useEffect(() => {
+    if (!user || prefilled.current) return;
+    prefilled.current = true;
+    const meta = user.user_metadata as Record<string, unknown> | undefined;
+    const raw = typeof meta?.full_name === "string" ? meta.full_name : typeof meta?.name === "string" ? meta.name : "";
+    const [first = "", ...rest] = raw.trim().split(/\s+/).filter(Boolean);
+    setForm((f) => ({
+      ...f,
+      ownerFirstName: f.ownerFirstName || first,
+      ownerLastName: f.ownerLastName || rest.join(" "),
+    }));
+  }, [user]);
 
-  const googleSignUp = async () => {
-    if (accLoading) return;
-    setAccLoading(true);
-    setAccError('');
-    const { error: e } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: callbackUrl() } });
-    if (e) {
-      console.error('google:', e.message);
-      setAccError('No pudimos conectar con Google. Intenta de nuevo.');
-      setAccLoading(false);
-    }
-  };
+  // Al completar los 5 dígitos del C.P., consulta /api/cp/:cp y rellena estado, ciudad y colonias.
+  // Todo sigue siendo editable: si la consulta falla o no existe, el formulario queda en captura manual.
+  useEffect(() => {
+    const cp = form.postalCode;
+    setManualColony(false);
 
-  const emailSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (accLoading) return;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return setAccError('Revisa el formato de tu correo.');
-    if (password.length < 8) return setAccError('La contraseña debe tener al menos 8 caracteres.');
-    setAccLoading(true);
-    setAccError('');
-    const { data, error: err } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-      options: { emailRedirectTo: callbackUrl() },
-    });
-    setAccLoading(false);
-    if (err) {
-      console.error('signUp:', err.message);
-      setAccError(err.message.toLowerCase().includes('registered') ? 'Ese correo ya tiene cuenta. Inicia sesión.' : 'No pudimos crear tu cuenta. Intenta de nuevo.');
-    } else if (data.session) {
-      setAuth('user'); // la confirmación por correo está desactivada en Supabase
-    } else {
-      setSentMsg('Te enviamos un correo para confirmar tu cuenta. Ábrelo y volverás aquí para registrar tu taller.');
-    }
-  };
-
-  const digits = phone.replace(/\D/g, '');
-
-  const validateStep = (s: number): string | null => {
-    if (s === 0) {
-      if (name.trim().length < 3) return 'El nombre del negocio debe tener al menos 3 caracteres.';
-      if (!SPECIALTIES.some((x) => x.value === type)) return 'Elige la especialidad principal de tu taller.';
-      if (city.trim().length > 80) return 'La ciudad es demasiado larga.';
-    }
-    if (s === 1 && digits && (digits.length < 10 || digits.length > 15)) return 'El teléfono debe tener entre 10 y 15 dígitos.';
-    return null;
-  };
-
-  const next = () => {
-    const problem = validateStep(step);
-    if (problem) return setError(problem);
-    setError('');
-    setStep((s) => s + 1);
-  };
-
-  const toggleService = (id: string) =>
-    setServices((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (loading) return;
-    const problem = validateStep(0) || validateStep(1);
-    if (problem) return setError(problem);
-
-    setLoading(true);
-    setError('');
-    const { error: rpcError } = await supabase.rpc('create_workshop', {
-      p_name: name.trim(),
-      p_type: type,
-      p_city: city.trim() || null,
-      p_phone: digits || null,
-      p_services: services,
-    });
-    if (rpcError) {
-      console.error('create_workshop:', rpcError.message);
-      setError(rpcError.message.includes('Ya tienes') ? 'Tu cuenta ya tiene un taller registrado.' : 'No pudimos crear tu taller. Intenta de nuevo.');
-      setLoading(false);
+    if (cp.length !== 5) {
+      setColonias([]);
+      setCpStatus("idle");
       return;
     }
-    setDone(true);
-    setTimeout(() => { router.replace('/dashboard'); router.refresh(); }, 1400);
+
+    const ctrl = new AbortController();
+    setCpStatus("loading");
+
+    fetch(`/api/cp/${cp}`, { signal: ctrl.signal })
+      .then(async (res) => {
+        const data = (await res.json().catch(() => null)) as CpResponse | null;
+        if (!res.ok || !data || data.error) throw new Error(`cp_${res.status}`);
+        return data;
+      })
+      .then((info) => {
+        setColonias(info.colonias);
+        setForm((f) => ({
+          ...f,
+          city: info.ciudad || info.municipio || f.city,
+          state: info.estado || f.state,
+          colony:
+            info.colonias.length === 1
+              ? info.colonias[0]
+              : info.colonias.includes(f.colony)
+                ? f.colony
+                : "",
+        }));
+        setCpStatus("ok");
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setColonias([]);
+        setCpStatus("error");
+      });
+
+    return () => ctrl.abort();
+  }, [form.postalCode]);
+
+  const setField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    if (key in errors) setErrors((e) => ({ ...e, [key]: undefined }));
   };
 
-  if (auth === 'checking') {
-    return <div className="zo min-h-screen grid place-items-center text-sm zo-muted"><style>{STYLES}</style><ThemeSync />Verificando tu sesión…</div>;
-  }
+  const onNameChange = (value: string) => {
+    setForm((f) => ({ ...f, name: value, slug: slugTouched ? f.slug : slugify(value) }));
+    setErrors((e) => ({ ...e, name: undefined, ...(slugTouched ? {} : { slug: undefined }) }));
+  };
+
+  const onColonySelect = (value: string) => {
+    if (value === MANUAL_COLONY) {
+      setManualColony(true);
+      setField("colony", "");
+    } else {
+      setField("colony", value);
+    }
+  };
+
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy) return;
+
+    setFormError(null);
+    const localErrors = validate(form);
+    setErrors(localErrors);
+    if (Object.keys(localErrors).length > 0) return;
+
+    setBusy(true);
+    try {
+      // 1) Servidor: crea el taller y escribe app_metadata.tenant_id + role.
+      const result = await provisionTenant({
+        name: form.name,
+        slug: form.slug.replace(/^-+|-+$/g, ""),
+        ownerFirstName: form.ownerFirstName,
+        ownerLastName: form.ownerLastName,
+        phone: form.phone,
+        address: buildAddress(form),
+        postalCode: form.postalCode,
+        city: form.city,
+        state: form.state,
+      });
+
+      if (!result.success) {
+        if (result.field) setErrors({ [result.field]: result.error });
+        else setFormError(result.error);
+        setBusy(false);
+        return;
+      }
+
+      // 2) Cliente: renueva el JWT para que traiga el tenant_id nuevo (refreshSession) y resincroniza el store
+      //    (fetchProfile). Sin esto, las políticas RLS que leen auth.jwt() rechazarían al usuario.
+      const synced = await refreshTenant();
+      if (!synced) {
+        setFormError(
+          "Tu taller se creó, pero no pudimos actualizar tu sesión. Pulsa de nuevo el botón para continuar; no se duplicará."
+        );
+        setBusy(false);
+        return;
+      }
+
+      // 3) Listo: al ERP. (busy sigue en true hasta que cambie la ruta.)
+      router.replace(`/${locale}/workshop/dashboard`);
+      router.refresh();
+    } catch (err) {
+      console.error("[onboarding] error inesperado:", err);
+      setFormError("Ocurrió un error inesperado. Intenta de nuevo.");
+      setBusy(false);
+    }
+  };
+
+  const onSignOut = async () => {
+    setBusy(true);
+    await signOut();
+    router.replace(`/${locale}/login`);
+  };
+
+  const slugPreview = form.slug.replace(/^-+|-+$/g, "") || "tu-taller";
+
+  const cpHint =
+    cpStatus === "loading"
+      ? "Buscando tu código postal…"
+      : cpStatus === "ok"
+        ? "Estado, ciudad y colonia completados. Puedes editarlos."
+        : cpStatus === "error"
+          ? "No encontramos ese código postal. Escribe estado, ciudad y colonia a mano."
+          : "Escribe 5 dígitos y completamos estado, ciudad y colonia.";
+
+  const showColonySelect = colonias.length > 1 && !manualColony;
 
   return (
-    <div className="zo min-h-screen flex items-center justify-center p-4">
-      <style>{STYLES}</style>
-      <div className="zo-card w-full max-w-4xl rounded-2xl overflow-hidden flex">
-        {/* Lo que incluye tu espacio */}
-        <aside className="hidden md:flex w-[40%] shrink-0 flex-col p-9 bg-[#15151E] text-white relative overflow-hidden">
-          <div aria-hidden className="absolute -right-16 top-0 h-full w-24 bg-[#E10600]" style={{ clipPath: 'polygon(45% 0,100% 0,100% 100%,0 100%)' }} />
-          <div className="relative flex items-center gap-3 mb-10">
-            <ZyraMark className="w-9 h-6" />
-            <span className="zo-head font-bold text-xl">Zyra</span>
+    <main className="flex min-h-screen items-center justify-center bg-[#F3F3F5] p-4 py-10 text-zinc-900 transition-colors dark:bg-[#15151E] dark:text-[#F3F3F5]">
+      {/* La tarjeta es `relative` y aloja el selector de tema en su esquina superior derecha */}
+      <div className="relative mx-auto w-full max-w-xl rounded-2xl border border-zinc-200 bg-white/90 p-8 text-zinc-900 shadow-xl backdrop-blur transition-colors dark:border-zinc-800 dark:bg-[#292B33]/90 dark:text-[#F3F3F5] dark:shadow-black/40">
+        <div className="absolute right-4 top-4 z-10 text-zinc-700 dark:text-zinc-200">
+          <ThemeToggle />
+        </div>
+
+        <header className="mb-8 space-y-4 pr-12">
+          <div className="flex size-11 items-center justify-center rounded-xl bg-red-600/10 text-red-600 dark:bg-red-600/20 dark:text-red-500">
+            <WrenchIcon className="size-6" weight="bold" />
           </div>
-          <h1 className="relative zo-head font-extrabold text-2xl leading-tight">Tu taller listo para operar hoy.</h1>
-          <p className="relative text-sm text-white/65 mt-3">Al terminar se crea tu espacio privado, con estos módulos:</p>
-          <ul className="relative mt-6 space-y-3 text-sm">
-            {INCLUDED.map((m) => (
-              <li key={m} className="flex items-center gap-2.5">
-                <span className="grid place-items-center w-5 h-5 rounded-full bg-[#E10600]"><Check className="w-3 h-3" aria-hidden /></span>{m}
-              </li>
-            ))}
-          </ul>
-          <p className="relative mt-auto pt-8 text-xs text-white/55">Tus datos solo los ves tú y tu equipo. Ningún otro taller puede consultarlos.</p>
-        </aside>
-
-        {/* Formulario */}
-        <div className="flex-1 p-7 sm:p-10 min-h-[560px] flex flex-col justify-center">
-          <div className="flex items-center justify-between mb-6">
-            <Link href="/es/public" className="inline-flex items-center gap-1.5 text-sm font-semibold zo-muted hover:text-[#E10600]">
-              <ArrowLeft className="w-4 h-4" aria-hidden /> Volver al inicio
-            </Link>
-            <ThemeToggle />
+          <div className="space-y-1">
+            <CardTitle className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-[#F3F3F5]">
+              Registra tu taller
+            </CardTitle>
+            <CardDescription className="text-zinc-600 dark:text-zinc-400">
+              Un último paso para entrar a Zyra. Podrás cambiar estos datos más adelante.
+            </CardDescription>
           </div>
-          {auth === 'anon' ? (
-            <div className="space-y-5">
-              <div>
-                <h2 className="zo-head font-bold text-2xl">Crea tu cuenta</h2>
-                <p className="zo-muted text-sm mt-1.5">Primero tu cuenta; en el siguiente paso registras tu taller.</p>
+        </header>
+
+        <form onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
+          {/* ---------- Tu taller ---------- */}
+          <fieldset className="flex flex-col gap-4" disabled={busy}>
+            <legend className="mb-1 text-sm font-semibold text-zinc-900 dark:text-[#F3F3F5]">Tu taller</legend>
+
+            <Field id="name" label="Nombre del taller" error={errors.name}>
+              <Input
+                id="name"
+                value={form.name}
+                onChange={(e) => onNameChange(e.target.value)}
+                placeholder="Taller Hermanos López"
+                autoComplete="organization"
+                className={INPUT_CLS}
+                aria-invalid={Boolean(errors.name)}
+                aria-describedby={errors.name ? "name-error" : undefined}
+              />
+            </Field>
+
+            <Field
+              id="slug"
+              label="Subdominio"
+              error={errors.slug}
+              hint={`Ingresarás a ${slugPreview}.zyra.app`}
+            >
+              <div className="flex">
+                <Input
+                  id="slug"
+                  value={form.slug}
+                  onChange={(e) => {
+                    setSlugTouched(true);
+                    setField("slug", sanitizeSlugInput(e.target.value));
+                  }}
+                  onBlur={() => setField("slug", form.slug.replace(/-+$/, ""))}
+                  placeholder="taller-hermanos-lopez"
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  className={`${INPUT_CLS} rounded-r-none`}
+                  aria-invalid={Boolean(errors.slug)}
+                  aria-describedby={errors.slug ? "slug-error" : "slug-hint"}
+                />
+                <span className="flex items-center rounded-r-xl border border-l-0 border-zinc-200 bg-zinc-200/70 px-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-400">
+                  .zyra.app
+                </span>
               </div>
-              {sentMsg ? (
-                <p role="status" className="rounded-xl border border-green-500/40 bg-green-500/10 px-3 py-3 text-sm">{sentMsg}</p>
-              ) : (
-                <>
-                  <button type="button" className="zo-btn zo-ghost w-full" onClick={googleSignUp} disabled={accLoading}>
-                    <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
-                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.99.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                    </svg>
-                    Continuar con Google
-                  </button>
-                  <div className="flex items-center gap-3 text-xs zo-muted">
-                    <span className="flex-1 h-px" style={{ background: 'var(--line)' }} />o con tu correo<span className="flex-1 h-px" style={{ background: 'var(--line)' }} />
-                  </div>
-                  <form onSubmit={emailSignUp} noValidate className="space-y-4">
-                    <div>
-                      <label htmlFor="acc-email" className="block text-sm font-semibold mb-1.5">Correo electrónico</label>
-                      <input id="acc-email" type="email" autoComplete="email" className="zo-in" value={email} onChange={(e) => setEmail(e.target.value)} disabled={accLoading} />
-                    </div>
-                    <div>
-                      <label htmlFor="acc-pass" className="block text-sm font-semibold mb-1.5">Contraseña <span className="zo-muted font-normal">(mínimo 8 caracteres)</span></label>
-                      <input id="acc-pass" type="password" autoComplete="new-password" className="zo-in" value={password} onChange={(e) => setPassword(e.target.value)} disabled={accLoading} />
-                    </div>
-                    {accError && <p role="alert" className="rounded-xl border border-[#E10600]/30 bg-[#E10600]/10 px-3 py-2 text-sm text-[#E10600]">{accError}</p>}
-                    <button type="submit" className="zo-btn zo-red w-full" disabled={accLoading}>
-                      {accLoading ? (<><Loader2 className="w-4 h-4 animate-spin" aria-hidden /> Creando cuenta…</>) : 'Crear cuenta y continuar'}
-                    </button>
-                  </form>
-                </>
-              )}
-              <p className="text-sm zo-muted text-center">¿Ya tienes cuenta? <Link href="/es/login" className="font-bold hover:text-[#E10600]">Inicia sesión</Link></p>
-            </div>
-          ) : done ? (
-            <div className="text-center" aria-live="polite">
-              <div className="mx-auto mb-5 grid place-items-center w-16 h-16 rounded-full bg-green-500 text-white"><Check className="w-8 h-8" aria-hidden /></div>
-              <h2 className="zo-head font-bold text-2xl mb-2">Tu taller está listo</h2>
-              <p className="zo-muted text-sm">Te llevamos a tu panel…</p>
-            </div>
-          ) : (
-            <form onSubmit={submit} noValidate>
-              <div className="mb-6">
-                <p className="text-sm font-semibold zo-muted mb-2">Paso {step + 1} de 3: {STEP_TITLES[step]}</p>
-                <div className="flex gap-1.5" aria-hidden>
-                  {STEP_TITLES.map((_, i) => (
-                    <span key={i} className="h-1.5 flex-1 rounded-full" style={{ background: i <= step ? '#E10600' : 'var(--line)' }} />
-                  ))}
-                </div>
-              </div>
+            </Field>
 
-              {step === 0 && (
-                <div className="space-y-5">
-                  <h2 className="zo-head font-bold text-2xl">Cuéntanos de tu negocio</h2>
-                  <div>
-                    <label htmlFor="name" className="block text-sm font-semibold mb-1.5">Nombre del negocio</label>
-                    <input id="name" className="zo-in" maxLength={60} autoComplete="organization" placeholder="Ej. Mecánica Automotriz López" value={name} onChange={(e) => setName(e.target.value)} />
-                  </div>
-                  <div role="radiogroup" aria-label="Especialidad principal">
-                    <p className="text-sm font-semibold mb-1.5">Especialidad principal</p>
-                    <div className="grid sm:grid-cols-2 gap-2">
-                      {SPECIALTIES.map(({ value, label, icon: Icon }) => (
-                        <button key={value} type="button" role="radio" aria-checked={type === value} className="zo-opt" onClick={() => setType(value)}>
-                          <Icon className="w-4 h-4 text-[#E10600] shrink-0" aria-hidden />{label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label htmlFor="city" className="block text-sm font-semibold mb-1.5">Ciudad <span className="zo-muted font-normal">(opcional)</span></label>
-                    <input id="city" className="zo-in" maxLength={80} autoComplete="address-level2" value={city} onChange={(e) => setCity(e.target.value)} />
-                  </div>
-                </div>
-              )}
+            <Field id="phone" label="Teléfono (opcional)">
+              <Input
+                id="phone"
+                type="tel"
+                value={form.phone}
+                onChange={(e) => setField("phone", e.target.value)}
+                placeholder="961 123 4567"
+                autoComplete="tel"
+                className={INPUT_CLS}
+              />
+            </Field>
 
-              {step === 1 && (
-                <div className="space-y-5">
-                  <h2 className="zo-head font-bold text-2xl">¿Cómo te contactan tus clientes?</h2>
-                  <div>
-                    <label htmlFor="phone" className="block text-sm font-semibold mb-1.5">WhatsApp o teléfono <span className="zo-muted font-normal">(opcional)</span></label>
-                    <input id="phone" className="zo-in" inputMode="tel" autoComplete="tel" placeholder="Solo números, con lada" value={phone} onChange={(e) => setPhone(e.target.value)} />
-                    <p className="zo-muted text-xs mt-1.5">Lo usaremos para el botón de contacto de tu perfil público. Redes sociales, horarios y logotipo los agregas después en Configuración.</p>
-                  </div>
-                </div>
-              )}
-
-              {step === 2 && (
-                <div className="space-y-4">
-                  <h2 className="zo-head font-bold text-2xl">¿Qué servicios ofreces?</h2>
-                  <p className="zo-muted text-sm">Los cargamos en tu catálogo para que puedas cotizar desde el primer día. Después editas nombres y precios.</p>
-                  <div className="grid sm:grid-cols-2 gap-2" role="group" aria-label="Servicios iniciales">
-                    {SERVICES.map(([id, label]) => (
-                      <button key={id} type="button" role="checkbox" aria-checked={services.includes(id)} className="zo-opt" onClick={() => toggleService(id)}>
-                        <span className="grid place-items-center w-4 h-4 rounded border shrink-0" style={{ borderColor: services.includes(id) ? '#E10600' : 'var(--line)', background: services.includes(id) ? '#E10600' : 'transparent', color: '#fff' }}>
-                          {services.includes(id) && <Check className="w-3 h-3" aria-hidden />}
-                        </span>{label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {error && <p role="alert" className="mt-5 rounded-xl border border-[#E10600]/30 bg-[#E10600]/10 px-3 py-2 text-sm text-[#E10600]">{error}</p>}
-
-              <div className="mt-7 flex items-center justify-between gap-3">
-                {step > 0 ? (
-                  <button type="button" className="zo-btn zo-ghost" disabled={loading} onClick={() => { setError(''); setStep(step - 1); }}>
-                    <ArrowLeft className="w-4 h-4" aria-hidden /> Atrás
-                  </button>
-                ) : <span />}
-                {step < 2 ? (
-                  <button type="button" className="zo-btn zo-red" onClick={next}>Continuar <ArrowRight className="w-4 h-4" aria-hidden /></button>
-                ) : (
-                  <button type="submit" className="zo-btn zo-red" disabled={loading}>
-                    {loading ? (<><Loader2 className="w-4 h-4 animate-spin" aria-hidden /> Creando tu taller…</>) : 'Crear mi taller'}
-                  </button>
+            {/* Dirección, en orden de captura: C.P. -> estado y ciudad -> colonia -> calle */}
+            <Field id="postalCode" label="Código postal (opcional)" error={errors.postalCode} hint={cpHint}>
+              <div className="relative">
+                <Input
+                  id="postalCode"
+                  value={form.postalCode}
+                  onChange={(e) => setField("postalCode", e.target.value.replace(/\D/g, "").slice(0, 5))}
+                  placeholder="30000"
+                  inputMode="numeric"
+                  maxLength={5}
+                  autoComplete="postal-code"
+                  className={INPUT_CLS}
+                  aria-invalid={Boolean(errors.postalCode)}
+                  aria-describedby={errors.postalCode ? "postalCode-error" : "postalCode-hint"}
+                />
+                {cpStatus === "loading" && (
+                  <CircleNotchIcon className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-zinc-400" />
                 )}
               </div>
-            </form>
+            </Field>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field id="state" label="Estado (opcional)">
+                <Input
+                  id="state"
+                  value={form.state}
+                  onChange={(e) => setField("state", e.target.value)}
+                  placeholder="Chiapas"
+                  autoComplete="address-level1"
+                  className={INPUT_CLS}
+                />
+              </Field>
+              <Field id="city" label="Ciudad o municipio (opcional)">
+                <Input
+                  id="city"
+                  value={form.city}
+                  onChange={(e) => setField("city", e.target.value)}
+                  placeholder="Tuxtla Gutiérrez"
+                  autoComplete="address-level2"
+                  className={INPUT_CLS}
+                />
+              </Field>
+            </div>
+
+            <Field id="colony" label="Colonia (opcional)">
+              {showColonySelect ? (
+                <select
+                  id="colony"
+                  value={form.colony}
+                  onChange={(e) => onColonySelect(e.target.value)}
+                  className={SELECT_CLS}
+                >
+                  <option value="">Selecciona tu colonia</option>
+                  {colonias.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                  <option value={MANUAL_COLONY}>Otra (escribir a mano)</option>
+                </select>
+              ) : (
+                <>
+                  <Input
+                    id="colony"
+                    value={form.colony}
+                    onChange={(e) => setField("colony", e.target.value)}
+                    placeholder="Centro"
+                    autoComplete="off"
+                    className={INPUT_CLS}
+                  />
+                  {colonias.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManualColony(false);
+                        setField("colony", "");
+                      }}
+                      className="self-start text-xs font-medium text-red-600 hover:underline dark:text-red-400"
+                    >
+                      Elegir de la lista
+                    </button>
+                  )}
+                </>
+              )}
+            </Field>
+
+            <Field id="address" label="Calle y número (opcional)">
+              <Input
+                id="address"
+                value={form.address}
+                onChange={(e) => setField("address", e.target.value)}
+                placeholder="Av. Central Poniente 123"
+                autoComplete="address-line1"
+                className={INPUT_CLS}
+              />
+            </Field>
+          </fieldset>
+
+          {/* ---------- Tus datos ---------- */}
+          <fieldset className="flex flex-col gap-4" disabled={busy}>
+            <legend className="mb-1 text-sm font-semibold text-zinc-900 dark:text-[#F3F3F5]">
+              Tus datos (responsable del taller)
+            </legend>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field id="ownerFirstName" label="Nombre" error={errors.ownerFirstName}>
+                <Input
+                  id="ownerFirstName"
+                  value={form.ownerFirstName}
+                  onChange={(e) => setField("ownerFirstName", e.target.value)}
+                  autoComplete="given-name"
+                  className={INPUT_CLS}
+                  aria-invalid={Boolean(errors.ownerFirstName)}
+                  aria-describedby={errors.ownerFirstName ? "ownerFirstName-error" : undefined}
+                />
+              </Field>
+              <Field id="ownerLastName" label="Apellidos" error={errors.ownerLastName}>
+                <Input
+                  id="ownerLastName"
+                  value={form.ownerLastName}
+                  onChange={(e) => setField("ownerLastName", e.target.value)}
+                  autoComplete="family-name"
+                  className={INPUT_CLS}
+                  aria-invalid={Boolean(errors.ownerLastName)}
+                  aria-describedby={errors.ownerLastName ? "ownerLastName-error" : undefined}
+                />
+              </Field>
+            </div>
+          </fieldset>
+
+          {formError && (
+            <div
+              role="alert"
+              className="rounded-xl border border-red-600/40 bg-red-600/10 px-3 py-2.5 text-sm text-red-700 dark:text-red-400"
+            >
+              {formError}
+            </div>
           )}
-        </div>
+
+          <div className="flex flex-col gap-3">
+            <Button
+              type="submit"
+              size="lg"
+              disabled={busy}
+              className="h-auto w-full rounded-xl bg-red-600 py-3 font-semibold text-white shadow-lg transition-all hover:bg-red-700 active:bg-[#A80703] disabled:opacity-70"
+            >
+              {busy ? (
+                <>
+                  <CircleNotchIcon className="size-4 animate-spin" />
+                  Creando tu taller…
+                </>
+              ) : (
+                "Crear mi taller"
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onSignOut}
+              disabled={busy}
+              className="text-zinc-600 hover:bg-transparent hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-transparent dark:hover:text-white"
+            >
+              Usar otra cuenta
+            </Button>
+          </div>
+        </form>
       </div>
+    </main>
+  );
+}
+
+function Field({
+  id,
+  label,
+  error,
+  hint,
+  children,
+}: {
+  id: string;
+  label: string;
+  error?: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id} className="text-zinc-800 dark:text-zinc-200">
+        {label}
+      </Label>
+      {children}
+      {error ? (
+        <p id={`${id}-error`} role="alert" className="text-xs text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      ) : hint ? (
+        <p id={`${id}-hint`} className="text-xs text-zinc-500 dark:text-zinc-400">
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }

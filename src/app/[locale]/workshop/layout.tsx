@@ -5,6 +5,15 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { NotifBell } from "@/components/shared/NotifBell";
 import { Separator } from "@/components/ui/separator";
 
+// Roles con acceso al ERP del taller.
+//  - "owner" / "admin": claim app_metadata.role que escribe provisionTenant().
+//  - "workshop": valor que provision_tenant() guarda en profiles.role del dueño.
+//  - "workshop_admin" / "super_admin": roles anteriores, se conservan por compatibilidad.
+const ALLOWED_ROLES = new Set(["owner", "admin", "workshop", "workshop_admin", "super_admin"]);
+
+const claim = (value: unknown): string | null =>
+  typeof value === "string" && value.length > 0 ? value : null;
+
 export default async function WorkshopLayout({
   children,
   params,
@@ -14,18 +23,30 @@ export default async function WorkshopLayout({
 }) {
   const { locale } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user) redirect(`/${locale}/auth/login`);
+  // getUser() valida el token con Supabase Auth y trae el app_metadata ACTUAL (no el de una cookie vieja).
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
+  if (!user) redirect(`/${locale}/login`);
 
-  if (!["workshop_admin", "super_admin"].includes(profile?.role ?? "")) {
-    redirect(`/${locale}/auth/login?error=unauthorized`);
+  // Sin taller registrado -> onboarding (el proxy ya lo hace, aquí es la red de seguridad).
+  if (!claim(user.app_metadata?.tenant_id)) redirect(`/${locale}/onboarding`);
+
+  // Mismo criterio que el store: primero el claim del JWT; si no existe, profiles.role.
+  let role = claim(user.app_metadata?.role);
+  if (!role) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle();
+    role = claim(profile?.role);
+  }
+
+  if (!role || !ALLOWED_ROLES.has(role)) {
+    redirect(`/${locale}/login?error=unauthorized`);
   }
 
   return (
