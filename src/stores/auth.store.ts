@@ -21,6 +21,8 @@ type AuthState = {
   isLoading: boolean;
   error: string | null;
   fetchProfile: () => Promise<void>;
+  /** Renueva el JWT (para que traiga el tenant_id recién escrito) y resincroniza el store. true si ya hay tenantId. */
+  refreshTenant: () => Promise<boolean>;
   updateProfile: (updates: ProfileUpdates) => Promise<boolean>;
   signOut: () => Promise<void>;
   reset: () => void;
@@ -95,6 +97,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (requestId !== latestRequest) return;
       console.error("[auth.store] fetchProfile falló:", err);
       set({ isLoading: false, error: "Ocurrió un error inesperado al cargar tu sesión." });
+    }
+  },
+
+  refreshTenant: async () => {
+    const supabase = createClient();
+    try {
+      // Emite un JWT nuevo con el app_metadata actual y lo guarda en las cookies.
+      const { error } = await supabase.auth.refreshSession();
+      if (error) {
+        console.error("[auth.store] refreshSession falló:", error.message);
+        set({ error: "No pudimos actualizar tu sesión. Cierra sesión y vuelve a entrar." });
+        return false;
+      }
+      await get().fetchProfile();
+      return get().tenantId !== null;
+    } catch (err) {
+      console.error("[auth.store] refreshTenant falló:", err);
+      set({ error: "Ocurrió un error inesperado al actualizar tu sesión." });
+      return false;
     }
   },
 

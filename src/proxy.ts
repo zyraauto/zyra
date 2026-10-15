@@ -29,9 +29,9 @@ function buildCsp(nonce: string) {
   return [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ''}`,
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob: https://res.cloudinary.com",
-    "font-src 'self' data:",
+    "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src 'self' ${supa} ${supa.replace(/^http/, 'ws')}`,
     "frame-ancestors 'none'",
     "base-uri 'self'",
@@ -63,6 +63,8 @@ export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
 
   // ---------- API / tRPC: sin idioma ni redirecciones; solo refresca la sesión ----------
+  // /api/cp/* entra por aquí: el proxy NUNCA bloquea por tenant_id, así que un usuario en onboarding
+  // (con sesión pero sin taller) puede consultar el código postal. La propia ruta exige sesión con getUser().
   if (API.test(path)) {
     const apiResponse = NextResponse.next({ request: { headers: new Headers(request.headers) } });
     const supabase = createSupabase(request, apiResponse);
@@ -107,6 +109,13 @@ export async function proxy(request: NextRequest) {
   // Claim del tenant: null/undefined/'' => el usuario aún no tiene taller. Sin consultas a profiles/workshops.
   const hasTenant = Boolean(user?.app_metadata?.tenant_id);
 
+  // Cuenta con 2FA activado pero sesión a medias (aal1): falta el segundo factor.
+  let needsMfa = false;
+  if (user) {
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    needsMfa = aal?.nextLevel === 'aal2' && aal.currentLevel !== 'aal2';
+  }
+
   const redirectTo = (to: string, withNext = false) => {
     const url = request.nextUrl.clone();
     url.pathname = to;
@@ -123,12 +132,25 @@ export async function proxy(request: NextRequest) {
   }
 
   if (user) {
+    if (needsMfa) {
+      // Sesión a medias: solo puede estar en las páginas de acceso, donde se pide el código.
+      if (isProtected || isOnboarding) return redirectTo(`/${locale}/login`);
+      return response;
+    }
+
     // ERP sin taller registrado -> onboarding
     if (NEEDS_TENANT.test(barePath) && !hasTenant) {
       return redirectTo(`/${locale}/onboarding`);
     }
-    // Taller ya registrado: no repetir onboarding ni volver a login
-    if (hasTenant && (isOnboarding || isAuthPage)) {
+
+    // Taller ya registrado: no repetir onboarding.
+    if (hasTenant && isOnboarding) {
+      return redirectTo(`/${locale}${HOME_AFTER_LOGIN}`);
+    }
+
+    // Taller ya registrado: tampoco volver a login/signup... salvo que el layout lo haya mandado con ?error=
+    // (p. ej. unauthorized). Sin esta excepción habría un bucle: dashboard -> login?error -> dashboard -> ...
+    if (hasTenant && isAuthPage && !request.nextUrl.searchParams.has('error')) {
       return redirectTo(`/${locale}${HOME_AFTER_LOGIN}`);
     }
   }
