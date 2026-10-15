@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Archivos de datos masivos y scripts temporales
+cpdescarga.txt
+postal_codes.csv
+convert_cp.py
