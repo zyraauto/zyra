@@ -1,6 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import { PromoCard } from "@/components/loyalty/PromoCard";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -69,8 +68,17 @@ export default async function AdminPromocionesPage() {
               </Card>
             ) : (
               <div className="grid sm:grid-cols-2 gap-4">
-                {tab.items.map((p) => (
-                  <PromoCard key={p.id} promo={p} />
+                {tab.items.map((p: any) => (
+                  <Card key={p.id}>
+                    <CardContent className="p-4">
+                      <p className="font-semibold text-sm">{p.title ?? p.name}</p>
+                      {(p.description || p.details) && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {p.description ?? p.details}
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
                 ))}
               </div>
             )}

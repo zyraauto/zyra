@@ -1,8 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { getAppointmentsByClient } from "@/lib/supabase/appointments";
-import { PointsBar } from "@/components/loyalty/PointsBar";
-import { PromoCard } from "@/components/loyalty/PromoCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +17,10 @@ import type { Promotion } from "@/types";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
-const STATUS_BADGE: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+const STATUS_BADGE: Record<
+  string,
+  { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
+> = {
   pending:     { label: "Pending",     variant: "secondary"   },
   confirmed:   { label: "Confirmed",   variant: "default"     },
   in_progress: { label: "In progress", variant: "default"     },
@@ -61,7 +62,7 @@ export default async function ClientDashboardPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Welcome back! Here an overview of your activity.
+          Welcome back! Here is an overview of your activity.
         </p>
       </div>
 
@@ -111,9 +112,6 @@ export default async function ClientDashboardPage() {
           </CardContent>
         </Card>
       </div>
-
-      {/* Points bar */}
-      <PointsBar />
 
       <div className="grid md:grid-cols-2 gap-6">
         {/* Upcoming appointments */}
@@ -178,7 +176,18 @@ export default async function ClientDashboardPage() {
               </CardContent>
             </Card>
           ) : (
-            promotions.map((p) => <PromoCard key={p.id} promo={p} />)
+            promotions.map((promo: any) => (
+              <Card key={promo.id}>
+                <CardContent className="p-4">
+                  <p className="font-semibold text-sm">{promo.title ?? promo.name}</p>
+                  {(promo.description || promo.details) && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {promo.description ?? promo.details}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            ))
           )}
         </div>
       </div>
