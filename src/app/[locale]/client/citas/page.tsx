@@ -17,11 +17,12 @@ const STATUS_BADGE: Record<
   AppointmentStatus,
   { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
 > = {
-  pending:     { label: "Pending",     variant: "secondary"   },
-  confirmed:   { label: "Confirmed",   variant: "default"     },
-  in_progress: { label: "In progress", variant: "default"     },
-  completed:   { label: "Completed",   variant: "outline"     },
-  cancelled:   { label: "Cancelled",   variant: "destructive" },
+  scheduled:  { label: "Scheduled",  variant: "secondary"   },
+  confirmed:  { label: "Confirmed",  variant: "default"     },
+  checked_in: { label: "Checked in", variant: "default"     },
+  no_show:    { label: "No show",    variant: "destructive" },
+  completed:  { label: "Completed",  variant: "outline"     },
+  cancelled:  { label: "Cancelled",  variant: "destructive" },
 };
 
 const TABS = [
@@ -48,9 +49,13 @@ export default function AppointmentsPage() {
   };
 
   const byTab: Record<string, typeof appointments> = {
-    upcoming:  appointments.filter((a) => ["pending", "confirmed", "in_progress"].includes(a.status ?? "pending")),
+    upcoming: appointments.filter((a) =>
+      ["scheduled", "confirmed", "checked_in"].includes(a.status ?? "scheduled")
+    ),
     completed: appointments.filter((a) => a.status === "completed"),
-    cancelled: appointments.filter((a) => a.status === "cancelled"),
+    cancelled: appointments.filter((a) =>
+      ["cancelled", "no_show"].includes(a.status ?? "")
+    ),
   };
 
   return (
@@ -64,9 +69,7 @@ export default function AppointmentsPage() {
         </div>
 
         <Button size="sm" asChild>
-          <Link href="/public/cotizador">
-            Book service
-          </Link>
+          <Link href="/public/cotizador">Book service</Link>
         </Button>
       </div>
 
@@ -100,9 +103,15 @@ export default function AppointmentsPage() {
             ) : (
               <div className="flex flex-col gap-3">
                 {byTab[t.value].map((apt) => {
-                  const status = apt.status ?? "pending";
-                  const badge   = STATUS_BADGE[status];
-                  const canCancel = ["pending", "confirmed"].includes(status);
+                  const status    = apt.status ?? "scheduled";
+                  const badge     = STATUS_BADGE[status];
+                  const canCancel = ["scheduled", "confirmed"].includes(status);
+                  const vehicle   = apt.customer_vehicles;
+                  const vehicleLabel = vehicle
+                    ? [vehicle.brand_name, vehicle.model_name, vehicle.year]
+                        .filter(Boolean)
+                        .join(" ")
+                    : null;
 
                   return (
                     <div
@@ -112,12 +121,9 @@ export default function AppointmentsPage() {
                       <div className="flex flex-col gap-1.5 min-w-0">
                         <div className="flex items-center gap-2">
                           <p className="font-medium text-sm">
-                            {apt.services?.name ?? "Service"}
+                            {apt.service_type ?? "Service"}
                           </p>
-                          <Badge
-                            variant={badge.variant}
-                            className="text-[10px]"
-                          >
+                          <Badge variant={badge.variant} className="text-[10px]">
                             {badge.label}
                           </Badge>
                         </div>
@@ -126,16 +132,17 @@ export default function AppointmentsPage() {
                           {apt.workshops?.name ?? "Workshop"}
                         </p>
 
+                        {vehicleLabel && (
+                          <p className="text-xs text-muted-foreground">
+                            {vehicleLabel}
+                            {vehicle?.plate ? ` · ${vehicle.plate}` : ""}
+                          </p>
+                        )}
+
                         {apt.scheduled_at && (
                           <p className="text-xs text-muted-foreground flex items-center gap-1">
                             <CalendarIcon className="size-3" />
                             {format(new Date(apt.scheduled_at), "EEEE, MMMM d · h:mm a")}
-                          </p>
-                        )}
-
-                        {apt.final_price != null && (
-                          <p className="text-xs font-medium">
-                            ${Number(apt.final_price).toLocaleString()}
                           </p>
                         )}
                       </div>

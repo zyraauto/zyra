@@ -16,8 +16,10 @@ export const metadata: Metadata = { title: "Admin Dashboard" };
 
 type UserRow      = Pick<Tables<"profiles">,     "id" | "role" | "created_at">;
 type WorkshopRow  = Pick<Tables<"workshops">,    "id" | "is_active">;
-type AppointmentRow = Pick<Tables<"appointments">,
-  "id" | "status" | "final_price" | "created_at" | "completed_at"
+type AppointmentRow = Pick<Tables<"appointments">, "id" | "status" | "created_at">;
+type WorkOrderRow = Pick<
+  Tables<"work_orders">,
+  "id" | "status" | "total" | "completed_at" | "delivered_at"
 >;
 
 export default async function AdminDashboardPage() {
@@ -25,26 +27,34 @@ export default async function AdminDashboardPage() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const [usersResult, workshopsResult, appointmentsResult] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("id, role, created_at"),
-    supabase
-      .from("workshops")
-      .select("id, is_active"),
-    supabase
-      .from("appointments")
-      .select("id, status, final_price, created_at, completed_at"),
-  ]);
+  const [usersResult, workshopsResult, appointmentsResult, workOrdersResult] =
+    await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id, role, created_at"),
+      supabase
+        .from("workshops")
+        .select("id, is_active"),
+      supabase
+        .from("appointments")
+        .select("id, status, created_at"),
+      supabase
+        .from("work_orders")
+        .select("id, status, total, completed_at, delivered_at")
+        .in("status", ["completed", "delivered"]),
+    ]);
 
   const users        = (usersResult.data        ?? []) as UserRow[];
   const workshops    = (workshopsResult.data    ?? []) as WorkshopRow[];
   const appointments = (appointmentsResult.data ?? []) as AppointmentRow[];
+  const closedOrders = (workOrdersResult.data   ?? []) as WorkOrderRow[];
 
-  const completed    = appointments.filter((a) => a.status === "completed");
-  const totalRevenue = completed.reduce(
-    (sum, a) => sum + Number(a.final_price ?? 0), 0
+  const totalRevenue = closedOrders.reduce(
+    (sum, o) => sum + Number(o.total ?? 0), 0
   );
+
+  // Fecha en que se cerró la orden (completada o, si falta, entregada)
+  const closedAt = (o: WorkOrderRow) => o.completed_at ?? o.delivered_at;
 
   // Monthly revenue — last 6 months
   const months = Array.from({ length: 6 }, (_, i) => {
@@ -54,15 +64,14 @@ export default async function AdminDashboardPage() {
     return { key, label };
   });
 
-  const revenueData = months.map(({ key, label }) => ({
-    month:   label,
-    revenue: completed
-      .filter((a) => a.completed_at?.startsWith(key))
-      .reduce((sum, a) => sum + Number(a.final_price ?? 0), 0),
-    count: completed
-      .filter((a) => a.completed_at?.startsWith(key))
-      .length,
-  }));
+  const revenueData = months.map(({ key, label }) => {
+    const ordersInMonth = closedOrders.filter((o) => closedAt(o)?.startsWith(key));
+    return {
+      month:   label,
+      revenue: ordersInMonth.reduce((sum, o) => sum + Number(o.total ?? 0), 0),
+      count:   ordersInMonth.length,
+    };
+  });
 
   // Role breakdown
   const roleCount = users.reduce<Record<string, number>>((acc, u) => {
@@ -127,7 +136,7 @@ export default async function AdminDashboardPage() {
           <CardTitle className="text-base">
             Platform revenue — last 6 months
           </CardTitle>
-        </CardHeader>
+                  </CardHeader>
         <CardContent>
           <RevenueChart data={revenueData} />
         </CardContent>

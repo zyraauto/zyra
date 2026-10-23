@@ -14,13 +14,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useCarBrands, useCarModels, useCarYears, useUserCars } from "@/hooks/useCars";
+import { useCarBrands, useCarModels, useUserCars } from "@/hooks/useCars";
 import { useAuthStore } from "@/stores/auth.store";
+
+const CURRENT_YEAR = new Date().getFullYear();
 
 const AddCarSchema = z.object({
   brand_id: z.string().uuid("Select a brand"),
   model_id: z.string().uuid("Select a model"),
-  year_id:  z.string().uuid("Select a year"),
+  year: z.coerce
+    .number()
+    .int()
+    .min(1950, "Enter a valid year")
+    .max(CURRENT_YEAR + 1, "Enter a valid year"),
   nickname: z.string().max(50).optional(),
   plate:    z.string().max(20).optional(),
   mileage:  z.coerce.number().int().min(0).optional(),
@@ -64,44 +70,34 @@ export function AddCarForm({ onSuccess }: Props) {
   });
 
   const brandId = watch("brand_id");
-  const modelId = watch("model_id");
 
   const { brands, isLoading: loadingBrands } = useCarBrands();
   const { models, isLoading: loadingModels } = useCarModels(brandId ?? null);
-  const { years,  isLoading: loadingYears  } = useCarYears(modelId ?? null);
 
-  // Reset downstream when brand changes
+  // Reset model when brand changes
   useEffect(() => {
     const run = async () => {
       setValue("model_id", "" as never);
-      setValue("year_id",  "" as never);
     };
     run();
   }, [brandId, setValue]);
 
-  // Reset year when model changes
-  useEffect(() => {
-    const run = async () => {
-      setValue("year_id", "" as never);
-    };
-    run();
-  }, [modelId, setValue]);
-
   const onSubmit = async (values: AddCarValues) => {
     if (!profile?.id) return;
 
-    const { error } = await addCar({
-      user_id:           profile.id,
-      year_id:           values.year_id,
-      nickname:          values.nickname ?? null,
-      plate:             values.plate ?? null,
-      mileage:           values.mileage ?? null,
-      last_service_date: null,
-      is_favorite:       false,
+    const brand = brands.find((b) => b.id === values.brand_id);
+    const model = models.find((m) => m.id === values.model_id);
 
-      // 👇 FALTABAN ESTOS
-      deleted_at:        null,
-      updated_at:        null,
+    const { error } = await addCar({
+      user_id:      profile.id,
+      brand_name:   brand?.name ?? null,
+      model_name:   model?.name ?? null,
+      year_manual:  values.year,
+      vehicle_type: model?.vehicle_type,
+      nickname:     values.nickname || null,
+      plate:        values.plate || null,
+      mileage:      values.mileage ?? null,
+      is_favorite:  false,
     });
 
     if (error) {
@@ -172,32 +168,15 @@ export function AddCarForm({ onSuccess }: Props) {
 
       {/* Year */}
       <div className="flex flex-col gap-2">
-        <Label>Year</Label>
-        <Select
-          disabled={!modelId || loadingYears}
-          onValueChange={(v) => setValue("year_id", v)}
-        >
-          <SelectTrigger>
-            <SelectValue
-              placeholder={
-                !modelId     ? "Select model first" :
-                loadingYears ? "Loading…"           :
-                "Select year"
-              }
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {years.map((y) => (
-              <SelectItem key={y.id} value={y.id}>
-                {y.year}
-                {y.engine_config ? ` — ${y.engine_config}` : ""}
-                {y.transmission  ? ` (${y.transmission})`  : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {errors.year_id && (
-          <p className="text-xs text-destructive">{errors.year_id.message}</p>
+        <Label htmlFor="year">Year</Label>
+        <Input
+          id="year"
+          type="number"
+          placeholder={String(CURRENT_YEAR - 5)}
+          {...register("year")}
+        />
+        {errors.year && (
+          <p className="text-xs text-destructive">{errors.year.message}</p>
         )}
       </div>
 

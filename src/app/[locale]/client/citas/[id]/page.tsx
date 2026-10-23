@@ -26,27 +26,27 @@ const STATUS_CONFIG: Record<
   {
     label: string;
     variant: "default" | "secondary" | "destructive" | "outline";
-    color: string;
   }
 > = {
-  pending:     { label: "Pending",     variant: "secondary",   color: "text-yellow-600" },
-  confirmed:   { label: "Confirmed",   variant: "default",     color: "text-blue-600"   },
-  in_progress: { label: "In progress", variant: "default",     color: "text-orange-600" },
-  completed:   { label: "Completed",   variant: "outline",     color: "text-green-600"  },
-  cancelled:   { label: "Cancelled",   variant: "destructive", color: "text-red-600"    },
+  scheduled:  { label: "Scheduled",  variant: "secondary"   },
+  confirmed:  { label: "Confirmed",  variant: "default"     },
+  checked_in: { label: "Checked in", variant: "default"     },
+  completed:  { label: "Completed",  variant: "outline"     },
+  no_show:    { label: "No show",    variant: "destructive" },
+  cancelled:  { label: "Cancelled",  variant: "destructive" },
 };
 
 const TIMELINE: AppointmentStatus[] = [
-  "pending",
+  "scheduled",
   "confirmed",
-  "in_progress",
+  "checked_in",
   "completed",
 ];
 
-type Params = { params: { id: string } };
+type Props = { params: Promise<{ id: string }> };
 
-export default async function AppointmentDetailPage({ params }: Params) {
-  const { id } = params;
+export default async function AppointmentDetailPage({ params }: Props) {
+  const { id } = await params;
 
   const supabase = await createClient();
   const {
@@ -57,25 +57,20 @@ export default async function AppointmentDetailPage({ params }: Params) {
 
   const appointment = await getAppointmentById(id);
 
-  if (!appointment || appointment.client_id !== user.id) notFound();
+  // Solo el dueño de la cita puede verla
+  if (!appointment || appointment.customers?.user_id !== user.id) notFound();
 
-  const status = appointment.status ?? "pending";
-
+  const status = appointment.status ?? "scheduled";
   const config = STATUS_CONFIG[status];
-  const isCancelled = status === "cancelled";
+  const hideTimeline = status === "cancelled" || status === "no_show";
 
   const timelineIndex = TIMELINE.indexOf(status);
-  const currentStep =
-    isCancelled ? -1 : Math.max(timelineIndex, 0);
+  const currentStep = hideTimeline ? -1 : Math.max(timelineIndex, 0);
 
-  const car   = appointment.user_cars;
-  const brand = car?.car_years?.car_models?.car_brands;
-  const model = car?.car_years?.car_models;
-  const year  = car?.car_years;
+  const vehicle = appointment.customer_vehicles;
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
-
       <Button variant="ghost" size="sm" className="w-fit -ml-2" asChild>
         <Link href="/client/citas">
           <ArrowLeftIcon className="size-4" />
@@ -86,12 +81,12 @@ export default async function AppointmentDetailPage({ params }: Params) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
-            {appointment.services?.name ?? "Service"}
+            {appointment.service_type ?? "Service"}
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            ID:{" "}
+            Folio:{" "}
             <span className="font-mono">
-              {appointment.id.slice(0, 8).toUpperCase()}
+              {appointment.folio ?? appointment.id.slice(0, 8).toUpperCase()}
             </span>
           </p>
         </div>
@@ -101,7 +96,7 @@ export default async function AppointmentDetailPage({ params }: Params) {
         </Badge>
       </div>
 
-      {!isCancelled && (
+      {!hideTimeline && (
         <Card>
           <CardContent className="p-5">
             <div className="flex items-center justify-between">
@@ -152,7 +147,6 @@ export default async function AppointmentDetailPage({ params }: Params) {
       )}
 
       <div className="grid md:grid-cols-2 gap-4">
-
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm flex items-center gap-2">
@@ -161,18 +155,17 @@ export default async function AppointmentDetailPage({ params }: Params) {
           </CardHeader>
 
           <CardContent className="flex flex-col gap-3">
-
             <div>
               <p className="text-xs text-muted-foreground">Service</p>
-              <p className="font-medium">{appointment.services?.name}</p>
+              <p className="font-medium">{appointment.service_type ?? "—"}</p>
             </div>
 
-            {appointment.services?.duration_minutes && (
+            {appointment.estimated_duration_min && (
               <div>
-                <p className="text-xs text-muted-foreground">Duration</p>
+                <p className="text-xs text-muted-foreground">Estimated duration</p>
                 <p className="text-sm flex items-center gap-1">
                   <ClockIcon className="size-3" />
-                  {appointment.services.duration_minutes} min
+                  {appointment.estimated_duration_min} min
                 </p>
               </div>
             )}
@@ -190,22 +183,12 @@ export default async function AppointmentDetailPage({ params }: Params) {
               </div>
             )}
 
-            {appointment.final_price && (
-              <div>
-                <p className="text-xs text-muted-foreground">Price</p>
-                <p className="text-lg font-bold">
-                  ${Number(appointment.final_price).toLocaleString()}
-                </p>
-              </div>
-            )}
-
-            {appointment.notes && (
+            {appointment.customer_notes && (
               <div>
                 <p className="text-xs text-muted-foreground">Your notes</p>
-                <p className="text-sm">{appointment.notes}</p>
+                <p className="text-sm">{appointment.customer_notes}</p>
               </div>
             )}
-
           </CardContent>
         </Card>
 
@@ -217,7 +200,6 @@ export default async function AppointmentDetailPage({ params }: Params) {
           </CardHeader>
 
           <CardContent className="flex flex-col gap-3">
-
             <div>
               <p className="font-medium">{appointment.workshops?.name}</p>
 
@@ -240,11 +222,10 @@ export default async function AppointmentDetailPage({ params }: Params) {
                 </a>
               </Button>
             )}
-
           </CardContent>
         </Card>
 
-        {car && (
+        {vehicle && (
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm flex items-center gap-2">
@@ -254,46 +235,42 @@ export default async function AppointmentDetailPage({ params }: Params) {
 
             <CardContent className="flex flex-col gap-2">
               <p className="font-medium">
-                {brand?.name} {model?.name} {year?.year}
+                {[vehicle.brand_name, vehicle.model_name, vehicle.year]
+                  .filter(Boolean)
+                  .join(" ")}
               </p>
 
-              {car.plate && (
+              {vehicle.plate && (
                 <p className="text-sm font-mono text-muted-foreground">
-                  {car.plate}
+                  {vehicle.plate}
                 </p>
               )}
 
-              {year?.engine_config && (
-                <p className="text-sm text-muted-foreground">
-                  {year.engine_config}
-                </p>
+              {vehicle.engine && (
+                <p className="text-sm text-muted-foreground">{vehicle.engine}</p>
               )}
             </CardContent>
           </Card>
         )}
 
-        {appointment.mechanic_notes && (
+        {status === "cancelled" && appointment.cancelled_reason && (
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Mechanic notes</CardTitle>
+              <CardTitle className="text-sm">Cancellation reason</CardTitle>
             </CardHeader>
 
             <CardContent>
-              <p className="text-sm">{appointment.mechanic_notes}</p>
+              <p className="text-sm">{appointment.cancelled_reason}</p>
 
-              {appointment.completed_at && (
+              {appointment.cancelled_at && (
                 <p className="text-xs text-muted-foreground mt-2">
-                  Completed on{" "}
-                  {format(
-                    new Date(appointment.completed_at),
-                    "MMM d, yyyy"
-                  )}
+                  Cancelled on{" "}
+                  {format(new Date(appointment.cancelled_at), "MMM d, yyyy")}
                 </p>
               )}
             </CardContent>
           </Card>
         )}
-
       </div>
     </div>
   );

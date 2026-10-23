@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect, notFound } from "next/navigation";
 import { getWorkshopsByOwner } from "@/lib/supabase/workshops";
 import { getAppointmentsByWorkshop } from "@/lib/supabase/appointments";
+import { customerName, vehicleLabel, hourInShop, SHOP_UTC_OFFSET } from "@/lib/appointmentFormat";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ import {
 import Link from "next/link";
 import { format, parseISO, isValid } from "date-fns";
 import type { Metadata } from "next";
-import type { AppointmentWithDetails, AppointmentStatus } from "@/types";
+import type { AppointmentStatus } from "@/types";
 
 export const metadata: Metadata = { title: "Daily Agenda" };
 
@@ -22,23 +23,24 @@ const STATUS_BADGE: Record<
   AppointmentStatus,
   { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
 > = {
-  pending:     { label: "Pending",     variant: "secondary"   },
-  confirmed:   { label: "Confirmed",   variant: "default"     },
-  in_progress: { label: "In progress", variant: "default"     },
-  completed:   { label: "Completed",   variant: "outline"     },
-  cancelled:   { label: "Cancelled",   variant: "destructive" },
+  scheduled:  { label: "Scheduled",  variant: "secondary"   },
+  confirmed:  { label: "Confirmed",  variant: "default"     },
+  checked_in: { label: "Checked in", variant: "default"     },
+  completed:  { label: "Completed",  variant: "outline"     },
+  no_show:    { label: "No show",    variant: "destructive" },
+  cancelled:  { label: "Cancelled",  variant: "destructive" },
 };
 
 const HOUR_SLOTS = Array.from({ length: 11 }, (_, i) => i + 8); // 08:00 – 18:00
 
-type Params = { params: { date: string } };
+type Props = { params: Promise<{ date: string }> };
 
-export default async function AgendaDatePage({ params }: Params) {
-  const { date } = params;
+export default async function AgendaDatePage({ params }: Props) {
+  const { date } = await params;
 
-  // Validación de fecha
+  // Validación de fecha (formato yyyy-MM-dd)
   const parsed = parseISO(date);
-  if (!isValid(parsed)) notFound();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isValid(parsed)) notFound();
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -50,16 +52,26 @@ export default async function AgendaDatePage({ params }: Params) {
 
   const workshop = workshops[0];
 
-  // Obtener citas para el taller y la fecha
-  const appointmentsRaw = await getAppointmentsByWorkshop(workshop.id, date);
-  const appointments = (appointmentsRaw ?? []) as (AppointmentWithDetails & { final_price: number | null })[];
+  // Citas del taller en la fecha
+  const appointments = await getAppointmentsByWorkshop(workshop.id, date);
 
-  // Agrupar por hora
+  // Ingresos del día: órdenes de trabajo cerradas ese día
+  const { data: orders } = await supabase
+    .from("work_orders")
+    .select("total")
+    .eq("workshop_id", workshop.id)
+    .in("status", ["completed", "delivered"])
+    .gte("completed_at", `${date}T00:00:00${SHOP_UTC_OFFSET}`)
+    .lte("completed_at", `${date}T23:59:59.999${SHOP_UTC_OFFSET}`);
+
+  const revenue = (orders ?? []).reduce((sum, o) => sum + Number(o.total ?? 0), 0);
+
+  // Agrupar por hora local del taller
   const byHour: Record<number, typeof appointments> = {};
   HOUR_SLOTS.forEach((h) => (byHour[h] = []));
   appointments.forEach((apt) => {
     if (!apt.scheduled_at) return;
-    const hour = new Date(apt.scheduled_at).getHours();
+    const hour = hourInShop(apt.scheduled_at);
     if (byHour[hour]) byHour[hour].push(apt);
     else byHour[hour] = [apt];
   });
@@ -68,9 +80,7 @@ export default async function AgendaDatePage({ params }: Params) {
     total: appointments.length,
     confirmed: appointments.filter((a) => a.status === "confirmed").length,
     completed: appointments.filter((a) => a.status === "completed").length,
-    revenue: appointments
-      .filter((a) => a.status === "completed")
-      .reduce((sum, a) => sum + Number(a.final_price ?? 0), 0),
+    revenue,
   };
 
   // Prev / next date
@@ -138,50 +148,45 @@ export default async function AgendaDatePage({ params }: Params) {
                     <div className="h-8 rounded border border-dashed border-border/50" />
                   ) : (
                     slotApts.map((apt) => {
-                      const status = apt.status ?? "pending";
+                      const status = apt.status ?? "scheduled";
                       const badge = STATUS_BADGE[status];
-                      const car = apt.user_cars;
-                      const brand = car?.car_years?.car_models?.car_brands;
-                      const model = car?.car_years?.car_models;
-                      const year = car?.car_years;
+                      const vehicle = vehicleLabel(apt);
 
                       return (
                         <div key={apt.id} className="flex items-start justify-between gap-3 p-3 rounded-lg bg-muted/50 border">
                           <div className="flex flex-col gap-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-sm font-medium">{apt.services?.name ?? "Service"}</p>
+                              <p className="text-sm font-medium">{apt.service_type ?? "Service"}</p>
                               <Badge variant={badge.variant} className="text-[10px]">{badge.label}</Badge>
                             </div>
 
                             <p className="text-xs text-muted-foreground flex items-center gap-1">
                               <UserIcon className="size-3" />
-                              {apt.profiles?.full_name ?? "Client"}
-                              {apt.profiles?.phone && ` · ${apt.profiles.phone}`}
+                              {customerName(apt)}
+                              {apt.customers?.phone && ` · ${apt.customers.phone}`}
                             </p>
 
-                            {car && (
+                            {vehicle && (
                               <p className="text-xs text-muted-foreground flex items-center gap-1">
                                 <CarIcon className="size-3" />
-                                {brand?.name} {model?.name} {year?.year}
-                                {car.plate && ` · ${car.plate}`}
+                                {vehicle}
+                                {apt.customer_vehicles?.plate && ` · ${apt.customer_vehicles.plate}`}
                               </p>
                             )}
 
-                            {apt.services?.duration_minutes && (
+                            {apt.estimated_duration_min ? (
                               <p className="text-xs text-muted-foreground flex items-center gap-1">
                                 <ClockIcon className="size-3" />
-                                {apt.services.duration_minutes} min
+                                {apt.estimated_duration_min} min
+                              </p>
+                            ) : null}
+
+                            {apt.customer_notes && (
+                              <p className="text-xs text-muted-foreground italic truncate max-w-xs">
+                                &quot;{apt.customer_notes}&quot;
                               </p>
                             )}
-
-                            {apt.notes && (
-                              <p className="text-xs text-muted-foreground italic truncate max-w-xs">&quot;{apt.notes}&quot;</p>
-                            )}
                           </div>
-
-                          {apt.final_price && (
-                            <p className="text-sm font-bold shrink-0">${Number(apt.final_price).toLocaleString()}</p>
-                          )}
                         </div>
                       );
                     })

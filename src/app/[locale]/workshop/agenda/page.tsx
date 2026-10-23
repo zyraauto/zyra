@@ -10,25 +10,30 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { format, isSameDay } from "date-fns";
+import { customerName, vehicleLabel } from "@/lib/appointmentFormat";
 import type { AppointmentStatus } from "@/types";
 
 const STATUS_OPTIONS: { value: AppointmentStatus; label: string }[] = [
-  { value: "confirmed",   label: "Confirm"      },
-  { value: "in_progress", label: "Start"        },
-  { value: "completed",   label: "Complete"     },
-  { value: "cancelled",   label: "Cancel"       },
+  { value: "confirmed",  label: "Confirm"  },
+  { value: "checked_in", label: "Check in" },
+  { value: "completed",  label: "Complete" },
+  { value: "no_show",    label: "No show"  },
+  { value: "cancelled",  label: "Cancel"   },
 ];
 
 const STATUS_BADGE: Record<
   AppointmentStatus,
   { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
 > = {
-  pending:     { label: "Pending",     variant: "secondary"   },
-  confirmed:   { label: "Confirmed",   variant: "default"     },
-  in_progress: { label: "In progress", variant: "default"     },
-  completed:   { label: "Completed",   variant: "outline"     },
-  cancelled:   { label: "Cancelled",   variant: "destructive" },
+  scheduled:  { label: "Scheduled",  variant: "secondary"   },
+  confirmed:  { label: "Confirmed",  variant: "default"     },
+  checked_in: { label: "Checked in", variant: "default"     },
+  completed:  { label: "Completed",  variant: "outline"     },
+  no_show:    { label: "No show",    variant: "destructive" },
+  cancelled:  { label: "Cancelled",  variant: "destructive" },
 };
+
+const CLOSED: AppointmentStatus[] = ["completed", "cancelled", "no_show"];
 
 export default function AgendaPage() {
   const { profile } = useAuthStore();
@@ -45,9 +50,8 @@ export default function AgendaPage() {
 
   const handleStatusChange = async (id: string, status: AppointmentStatus) => {
     setUpdating(id);
-    const extra = status === "completed" ? { completed_at: new Date().toISOString() } : undefined;
     try {
-      const { error } = await updateStatus(id, status, extra);
+      const { error } = await updateStatus(id, status);
       if (error) throw new Error("Failed to update status");
       toast.success("Status updated.");
     } catch {
@@ -99,44 +103,46 @@ export default function AgendaPage() {
             </Card>
           ) : (
             <div className="flex flex-col gap-3">
-              {dayApts
+              {[...dayApts]
                 .sort((a, b) => (a.scheduled_at ?? "").localeCompare(b.scheduled_at ?? ""))
                 .map((apt) => {
-                  const status = apt.status ?? "pending";
+                  const status = apt.status ?? "scheduled";
                   const badge = STATUS_BADGE[status];
+                  const vehicle = vehicleLabel(apt);
+
                   return (
                     <Card key={apt.id}>
                       <CardContent className="p-4 flex flex-col gap-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex flex-col gap-0.5">
-                            <div className="flex items-center gap-2">
-                              <p className="font-medium text-sm">{apt.services?.name ?? "Service"}</p>
-                              <Badge variant={badge.variant} className="text-[10px]">{badge.label}</Badge>
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              {apt.profiles?.full_name ?? "Client"}
-                              {apt.profiles?.phone && ` · ${apt.profiles.phone}`}
-                            </p>
-                            {apt.scheduled_at && (
-                              <p className="text-xs text-muted-foreground">
-                                {format(new Date(apt.scheduled_at), "h:mm a")}
-                                {apt.services?.duration_minutes && ` · ${apt.services.duration_minutes} min`}
-                              </p>
-                            )}
-                            {apt.notes && (
-                              <p className="text-xs text-muted-foreground italic">&quot;{apt.notes}&quot;</p>
-                            )}
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium text-sm">{apt.service_type ?? "Service"}</p>
+                            <Badge variant={badge.variant} className="text-[10px]">{badge.label}</Badge>
                           </div>
-
-                          {apt.final_price && (
-                            <p className="font-bold text-sm shrink-0">
-                              ${Number(apt.final_price).toLocaleString()}
+                          <p className="text-xs text-muted-foreground">
+                            {customerName(apt)}
+                            {apt.customers?.phone && ` · ${apt.customers.phone}`}
+                          </p>
+                          {vehicle && (
+                            <p className="text-xs text-muted-foreground">
+                              {vehicle}
+                              {apt.customer_vehicles?.plate && ` · ${apt.customer_vehicles.plate}`}
+                            </p>
+                          )}
+                          {apt.scheduled_at && (
+                            <p className="text-xs text-muted-foreground">
+                              {format(new Date(apt.scheduled_at), "h:mm a")}
+                              {apt.estimated_duration_min ? ` · ${apt.estimated_duration_min} min` : ""}
+                            </p>
+                          )}
+                          {apt.customer_notes && (
+                            <p className="text-xs text-muted-foreground italic">
+                              &quot;{apt.customer_notes}&quot;
                             </p>
                           )}
                         </div>
 
                         {/* Status changer */}
-                        {apt.status !== "completed" && apt.status !== "cancelled" && (
+                        {!CLOSED.includes(status) && (
                           <div className="flex items-center gap-2">
                             <Select
                               onValueChange={(v) => handleStatusChange(apt.id, v as AppointmentStatus)}
@@ -146,7 +152,7 @@ export default function AgendaPage() {
                                 <SelectValue placeholder="Update status…" />
                               </SelectTrigger>
                               <SelectContent>
-                                {STATUS_OPTIONS.filter((o) => o.value !== apt.status).map((o) => (
+                                {STATUS_OPTIONS.filter((o) => o.value !== status).map((o) => (
                                   <SelectItem key={o.value} value={o.value}>
                                     {o.label}
                                   </SelectItem>

@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect, notFound } from "next/navigation";
 import { getWorkshopById } from "@/lib/supabase/workshops";
 import { getAppointmentsByWorkshop } from "@/lib/supabase/appointments";
+import { customerName } from "@/lib/appointmentFormat";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,11 +32,12 @@ const STATUS_BADGE: Record<
   AppointmentStatus,
   { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
 > = {
-  pending:     { label: "Pending",     variant: "secondary"   },
-  confirmed:   { label: "Confirmed",   variant: "default"     },
-  in_progress: { label: "In progress", variant: "default"     },
-  completed:   { label: "Completed",   variant: "outline"     },
-  cancelled:   { label: "Cancelled",   variant: "destructive" },
+  scheduled:  { label: "Scheduled",  variant: "secondary"   },
+  confirmed:  { label: "Confirmed",  variant: "default"     },
+  checked_in: { label: "Checked in", variant: "default"     },
+  completed:  { label: "Completed",  variant: "outline"     },
+  no_show:    { label: "No show",    variant: "destructive" },
+  cancelled:  { label: "Cancelled",  variant: "destructive" },
 };
 
 const DAY_LABELS = {
@@ -50,7 +52,7 @@ const DAY_LABELS = {
 
 type OwnerRow = Pick<Tables<"profiles">, "full_name" | "phone" | "avatar_url">;
 
-// ✅ Next.js 16 — params es Promise
+// Next.js 16 — params es Promise
 type Params = { params: Promise<{ id: string; locale: string }> };
 
 export default async function AdminWorkshopDetailPage({ params }: Params) {
@@ -79,15 +81,32 @@ export default async function AdminWorkshopDetailPage({ params }: Params) {
 
   const owner = ownerData as OwnerRow | null;
 
+  // Ingresos: órdenes de trabajo cerradas del taller
+  const { data: ordersData } = await supabase
+    .from("work_orders")
+    .select("appointment_id, total, completed_at, delivered_at")
+    .eq("workshop_id", id)
+    .in("status", ["completed", "delivered"]);
+
+  const orders = ordersData ?? [];
+
+  const closedAt = (o: { completed_at: string | null; delivered_at: string | null }) =>
+    o.completed_at ?? o.delivered_at;
+
+  const priceByAppointment = new Map<string, number>();
+  orders.forEach((o) => {
+    if (o.appointment_id) priceByAppointment.set(o.appointment_id, Number(o.total ?? 0));
+  });
+
   // Stats
   const completed = appointments.filter((a) => a.status === "completed");
 
-  const totalRevenue = completed.reduce(
-    (sum, a) => sum + Number(a.final_price ?? 0),
+  const totalRevenue = orders.reduce(
+    (sum, o) => sum + Number(o.total ?? 0),
     0
   );
 
-  // ✅ Fix — filtra nulls antes de indexar
+  // Filtra nulls antes de indexar
   const statusCount = appointments.reduce<Record<AppointmentStatus, number>>(
     (acc, a) => {
       if (!a.status) return acc;
@@ -106,10 +125,10 @@ export default async function AdminWorkshopDetailPage({ params }: Params) {
   });
 
   const revenueData = months.map(({ key, label }) => {
-    const monthly = completed.filter((a) => a.completed_at?.startsWith(key));
+    const monthly = orders.filter((o) => closedAt(o)?.startsWith(key));
     return {
       month:   label,
-      revenue: monthly.reduce((sum, a) => sum + Number(a.final_price ?? 0), 0),
+      revenue: monthly.reduce((sum, o) => sum + Number(o.total ?? 0), 0),
       count:   monthly.length,
     };
   });
@@ -321,6 +340,7 @@ export default async function AdminWorkshopDetailPage({ params }: Params) {
               {appointments.slice(0, 8).map((apt) => {
                 if (!apt.status) return null;
                 const badge = STATUS_BADGE[apt.status];
+                const price = priceByAppointment.get(apt.id);
 
                 return (
                   <div
@@ -329,10 +349,10 @@ export default async function AdminWorkshopDetailPage({ params }: Params) {
                   >
                     <div className="flex flex-col gap-0.5 min-w-0">
                       <p className="text-sm font-medium truncate">
-                        {apt.services?.name ?? "Service"}
+                        {apt.service_type ?? "Service"}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {apt.profiles?.full_name ?? "Client"}
+                        {customerName(apt)}
                         {apt.scheduled_at && (
                           <>
                             {" · "}
@@ -343,9 +363,9 @@ export default async function AdminWorkshopDetailPage({ params }: Params) {
                     </div>
 
                     <div className="flex items-center gap-3 shrink-0">
-                      {apt.final_price && (
+                      {price != null && (
                         <p className="text-sm font-bold">
-                          ${Number(apt.final_price).toLocaleString()}
+                          ${price.toLocaleString()}
                         </p>
                       )}
                       <Badge variant={badge.variant} className="text-[10px]">

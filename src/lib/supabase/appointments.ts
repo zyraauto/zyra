@@ -1,44 +1,56 @@
 import { createClient } from "@/lib/supabase/server";
+import { SHOP_UTC_OFFSET } from "@/lib/appointmentFormat";
 import type { AppointmentWithDetails, AppointmentStatus } from "@/types";
 import type { TablesInsert, TablesUpdate } from "@/types/database";
 
 type AppointmentInsert = TablesInsert<"appointments">;
 type AppointmentUpdate = TablesUpdate<"appointments">;
 
+// "!inner" convierte el join en filtro: solo vuelven las citas cuyo
+// cliente (o mecánico) coincide con el usuario que se pide.
+function buildSelect(inner?: "customers" | "workshop_staff") {
+  const customers = inner === "customers" ? "customers!inner" : "customers";
+  const staff = inner === "workshop_staff" ? "workshop_staff!inner" : "workshop_staff";
+
+  return `
+    *,
+    workshops (id, name, address, phone_wa),
+    customer_vehicles (*),
+    ${customers} (id, user_id, first_name, last_name, phone),
+    ${staff} (id, first_name, last_name)
+  `;
+}
+
 export async function getAppointmentById(
   id: string
 ): Promise<AppointmentWithDetails | null> {
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("appointments")
-    .select(`
-      *,
-      workshops (id, name, address, phone_wa),
-      services (id, name, category, duration_minutes),
-      user_cars (*, car_years (*, car_models (*, car_brands (*)))),
-      profiles!appointments_client_id_fkey (id, full_name, phone)
-    `)
+    .select(buildSelect())
     .eq("id", id)
-    .single();
-  return (data as AppointmentWithDetails | null) ?? null;
+    .maybeSingle();
+
+  if (error) {
+    console.error("getAppointmentById:", error.message);
+    return null;
+  }
+  return (data as unknown as AppointmentWithDetails | null) ?? null;
 }
 
+// userId = id del usuario autenticado (customers.user_id)
 export async function getAppointmentsByClient(
-  clientId: string
+  userId: string
 ): Promise<AppointmentWithDetails[]> {
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("appointments")
-    .select(`
-      *,
-      workshops (id, name, address, phone_wa),
-      services (id, name, category, duration_minutes),
-      user_cars (*, car_years (*, car_models (*, car_brands (*)))),
-      profiles!appointments_client_id_fkey (id, full_name, phone)
-    `)
-    .eq("client_id", clientId)
+    .select(buildSelect("customers"))
+    .eq("customers.user_id", userId)
     .order("scheduled_at", { ascending: false });
-  return (data as AppointmentWithDetails[]) ?? [];
+
+  if (error) console.error("getAppointmentsByClient:", error.message);
+  return (data as unknown as AppointmentWithDetails[]) ?? [];
 }
 
 export async function getAppointmentsByWorkshop(
@@ -48,42 +60,34 @@ export async function getAppointmentsByWorkshop(
   const supabase = await createClient();
   let query = supabase
     .from("appointments")
-    .select(`
-      *,
-      workshops (id, name, address, phone_wa),
-      services (id, name, category, duration_minutes),
-      user_cars (*, car_years (*, car_models (*, car_brands (*)))),
-      profiles!appointments_client_id_fkey (id, full_name, phone)
-    `)
+    .select(buildSelect())
     .eq("workshop_id", workshopId)
     .order("scheduled_at", { ascending: true });
 
   if (date) {
     query = query
-      .gte("scheduled_at", `${date}T00:00:00`)
-      .lte("scheduled_at", `${date}T23:59:59`);
+      .gte("scheduled_at", `${date}T00:00:00${SHOP_UTC_OFFSET}`)
+      .lte("scheduled_at", `${date}T23:59:59.999${SHOP_UTC_OFFSET}`);
   }
 
-  const { data } = await query;
-  return (data as AppointmentWithDetails[]) ?? [];
+  const { data, error } = await query;
+  if (error) console.error("getAppointmentsByWorkshop:", error.message);
+  return (data as unknown as AppointmentWithDetails[]) ?? [];
 }
 
+// userId = id del usuario autenticado (workshop_staff.user_id)
 export async function getAppointmentsByMechanic(
-  mechanicId: string
+  userId: string
 ): Promise<AppointmentWithDetails[]> {
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("appointments")
-    .select(`
-      *,
-      workshops (id, name, address, phone_wa),
-      services (id, name, category, duration_minutes),
-      user_cars (*, car_years (*, car_models (*, car_brands (*)))),
-      profiles!appointments_client_id_fkey (id, full_name, phone)
-    `)
-    .eq("mechanic_id", mechanicId)
+    .select(buildSelect("workshop_staff"))
+    .eq("workshop_staff.user_id", userId)
     .order("scheduled_at", { ascending: true });
-  return (data as AppointmentWithDetails[]) ?? [];
+
+  if (error) console.error("getAppointmentsByMechanic:", error.message);
+  return (data as unknown as AppointmentWithDetails[]) ?? [];
 }
 
 export async function createAppointment(
@@ -95,19 +99,32 @@ export async function createAppointment(
     .insert(payload)
     .select("id")
     .single();
-  if (error) return null;
+
+  if (error) {
+    console.error("createAppointment:", error.message);
+    return null;
+  }
   return (data as { id: string } | null) ?? null;
 }
 
 export async function updateAppointmentStatus(
   id: string,
   status: AppointmentStatus,
-  extra?: Pick<AppointmentUpdate, "mechanic_notes" | "completed_at" | "final_price">
+  extra?: Pick<AppointmentUpdate, "notes" | "cancelled_reason">
 ): Promise<boolean> {
   const supabase = await createClient();
+  const now = new Date().toISOString();
+
   const { error } = await supabase
     .from("appointments")
-    .update({ status, ...extra })
+    .update({
+      status,
+      ...(status === "confirmed" ? { confirmed_at: now } : {}),
+      ...(status === "cancelled" ? { cancelled_at: now } : {}),
+      ...extra,
+    })
     .eq("id", id);
+
+  if (error) console.error("updateAppointmentStatus:", error.message);
   return !error;
 }

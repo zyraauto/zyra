@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore } from "@/stores/auth.store";
 import { formatDistanceToNow } from "date-fns";
-import type { AppointmentWithDetails } from "@/types";
+import type { Tables } from "@/types/database";
 
 type Notification = {
   id:        string;
@@ -27,35 +27,32 @@ type Notification = {
   read:      boolean;
 };
 
-function appointmentToNotif(a: AppointmentWithDetails): Notification {
+type ApptRow = Pick<Tables<"appointments">, "id" | "status" | "created_at">;
+
+function appointmentToNotif(a: ApptRow): Notification {
   const label =
-    a.status === "confirmed"    ? "Appointment confirmed ✅" :
-    a.status === "in_progress"  ? "Service in progress 🔧"   :
-    a.status === "completed"    ? "Service completed 🚗"      :
-    a.status === "cancelled"    ? "Appointment cancelled ❌"  :
+    a.status === "scheduled"  ? "Appointment scheduled 📅" :
+    a.status === "confirmed"  ? "Appointment confirmed ✅" :
+    a.status === "checked_in" ? "Service started 🔧"       :
+    a.status === "completed"  ? "Service completed 🚗"     :
+    a.status === "no_show"    ? "Missed appointment ⚠️"    :
+    a.status === "cancelled"  ? "Appointment cancelled ❌" :
     "Appointment update";
 
   return {
     id:        a.id,
     message:   label,
     href:      `/client/citas/${a.id}`,
-    createdAt: a.created_at ?? new Date().toISOString(), // fallback si es null
+    createdAt: a.created_at ?? new Date().toISOString(),
     read:      false,
   };
 }
 
-function isAppointmentWithDetails(
-  value: unknown
-): value is AppointmentWithDetails {
+// El payload de realtime trae solo la fila de la cita, sin relaciones
+function isAppointmentRow(value: unknown): value is ApptRow {
   if (!value || typeof value !== "object") return false;
   const obj = value as Record<string, unknown>;
-  return (
-    typeof obj.id         === "string" &&
-    typeof obj.status     === "string" &&
-    typeof obj.created_at === "string" &&
-    (obj.services  === null || typeof obj.services  === "object") &&
-    (obj.workshops === null || typeof obj.workshops === "object")
-  );
+  return typeof obj.id === "string" && typeof obj.status === "string";
 }
 
 export function NotifBell() {
@@ -72,26 +69,17 @@ export function NotifBell() {
     const supabase = createClient();
 
     const run = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("appointments")
-        .select(`
-          *,
-          workshops (id, name, address, phone_wa),
-          services (id, name, category, duration_minutes),
-          user_cars (*, car_years (*, car_models (*, car_brands (*)))),
-          profiles!appointments_client_id_fkey (id, full_name, phone)
-        `)
-        .eq("client_id", profile.id)
+        .select("id, status, created_at, customers!inner(user_id)")
+        .eq("customers.user_id", profile.id)
         .order("created_at", { ascending: false })
         .limit(10);
 
+      if (error) console.error("NotifBell:", error.message);
       if (!data || !mounted) return;
 
-      const notifs = data
-        .filter(isAppointmentWithDetails)
-        .map(appointmentToNotif);
-
-      setNotifications(notifs);
+      setNotifications(data.map(appointmentToNotif));
     };
 
     run();
@@ -103,6 +91,9 @@ export function NotifBell() {
 
     const supabase = createClient();
 
+    // Sin filtro de columna: la cita ya no guarda el id del usuario.
+    // Solo se actualizan notificaciones de citas que ya están en la lista
+    // (las del propio usuario), y Supabase aplica tus políticas RLS.
     const channel = supabase
       .channel(`notif:${profile.id}`)
       .on(
@@ -111,18 +102,17 @@ export function NotifBell() {
           event:  "UPDATE",
           schema: "public",
           table:  "appointments",
-          filter: `client_id=eq.${profile.id}`,
         },
         (payload) => {
-          const newAppointment = payload.new;
-          if (!isAppointmentWithDetails(newAppointment)) return;
+          const updated = payload.new;
+          if (!isAppointmentRow(updated)) return;
 
           setNotifications((prev) =>
             prev.map((n) =>
-              n.id === newAppointment.id
+              n.id === updated.id
                 ? {
                     ...n,
-                    message: appointmentToNotif(newAppointment).message,
+                    message: appointmentToNotif(updated).message,
                     read:    false,
                   }
                 : n

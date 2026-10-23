@@ -17,9 +17,12 @@ export type Promotion    = Tables<"promotions">;
 export type UserRole = Profile["role"];
 
 // ─── Enums (mirrors DB checks) ────────────────────────────────────
+export type CarModelYear = Tables<"car_model_years">;
+export type Customer        = Tables<"customers">;
+export type CustomerVehicle = Tables<"customer_vehicles">;
+export type WorkshopStaff   = Tables<"workshop_staff">;
 export type AppointmentStatus = NonNullable<Appointment["status"]>;
 export type ServiceCategory   = NonNullable<Service["category"]>;
-export type BodyType          = NonNullable<CarModel["body_type"]>;
 export type TransmissionType  = NonNullable<CarYear["transmission"]>;
 export type FuelType          = NonNullable<CarYear["fuel_type"]>;
 export type LoyaltyEventType  = LoyaltyEvent["event_type"];
@@ -28,18 +31,18 @@ export type TriggerType       = Promotion["trigger_type"];
 
 // ─── Composed types (joins frecuentes) ───────────────────────────
 export type UserCarWithDetails = UserCar & {
-  car_years: CarYear & {
+  car_model_years: (CarModelYear & {
     car_models: CarModel & {
       car_brands: CarBrand;
     };
-  };
+  }) | null;
 };
 
 export type AppointmentWithDetails = Appointment & {
-  workshops: Pick<Workshop, "id" | "name" | "address" | "phone_wa">;
-  services: Pick<Service, "id" | "name" | "category" | "duration_minutes">;
-  user_cars: UserCarWithDetails | null;
-  profiles: Pick<Profile, "id" | "full_name" | "phone"> | null;
+  workshops: Pick<Workshop, "id" | "name" | "address" | "phone_wa"> | null;
+  customer_vehicles: CustomerVehicle | null;
+  customers: Pick<Customer, "id" | "user_id" | "first_name" | "last_name" | "phone"> | null;
+  workshop_staff: Pick<WorkshopStaff, "id" | "first_name" | "last_name"> | null;
 };
 
 export type QuoteItem = {

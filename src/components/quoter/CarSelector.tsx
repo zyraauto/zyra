@@ -2,6 +2,7 @@
 
 import { useQuoterStore } from "@/stores/quoter.store";
 import { useCarBrands, useCarModels, useCarYears } from "@/hooks/useCars";
+import { brandLogoUrl } from "@/lib/brandLogo";
 import Image from "next/image";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +48,8 @@ function BrandCard({
   isSelected: boolean;
   onSelect: (b: CarBrand) => void;
 }) {
+  const logo = brandLogoUrl(brand);
+
   return (
     <button
       onClick={() => onSelect(brand)}
@@ -64,10 +67,12 @@ function BrandCard({
           className="absolute top-2 right-2 size-4 text-primary"
         />
       )}
-      {brand.logo_url ? (
+      {logo ? (
         <Image
-          src={brand.logo_url}
+          src={logo}
           alt={brand.name}
+          width={40}
+          height={40}
           className="h-10 w-auto object-contain"
         />
       ) : (
@@ -211,6 +216,8 @@ function YearCard({
 export function CarSelector() {
   const { step, brand, model, goToStep } = useQuoterStore();
 
+  const selectedLogo = brand ? brandLogoUrl(brand) : null;
+
   return (
     <div className="flex flex-col gap-8">
       {/* Brand */}
@@ -228,8 +235,14 @@ export function CarSelector() {
         </div>
         {brand && step !== "brand" ? (
           <div className="flex items-center gap-3 p-3 rounded-lg bg-primary/5 border border-primary/20">
-            {brand.logo_url && (
-              <Image src={brand.logo_url} alt={brand.name} className="h-8 w-auto" />
+            {selectedLogo && (
+              <Image
+                src={selectedLogo}
+                alt={brand.name}
+                width={32}
+                height={32}
+                className="h-8 w-auto"
+              />
             )}
             <span className="font-medium">{brand.name}</span>
             <CheckCircleIcon weight="fill" className="ml-auto size-5 text-primary" />

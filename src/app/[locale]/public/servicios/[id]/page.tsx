@@ -12,18 +12,20 @@ import {
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import type { Metadata } from "next";
-import type { Service, ServicePrice } from "@/types";
+import type { Service } from "@/types";
 
 type Params = { params: Promise<{ id: string }> };
 
 // Tipos para Supabase
 type ServiceRow = Service & { id: string };
-type ServicePriceRow = ServicePrice & {
-  car_years: {
-    year: number;
-    car_models: { name: string; car_brands: { name: string } };
-  };
+
+type PriceSample = {
+  label: string;
+  base_price: number;
+  parts_included: boolean | null;
 };
+
+const notNull = <T,>(v: T | null | undefined): v is T => v != null;
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { id } = await params;
@@ -58,22 +60,47 @@ export default async function ServiceDetailPage({ params }: Params) {
 
   const { data: prices } = await supabase
     .from("service_prices")
-    .select(`
-      base_price,
-      parts_included,
-      car_years (
-        year,
-        car_models (name, car_brands (name))
-      )
-    `)
+    .select("base_price, parts_included, year_id")
     .eq("service_id", id)
     .order("base_price")
     .limit(6);
 
-  const priceList = (prices ?? []) as ServicePriceRow[];
+  const priceRows = prices ?? [];
+
+  // car_years no tiene relación declarada con car_models: se resuelve por pasos
+  const yearIds = priceRows.map((p) => p.year_id).filter(notNull);
+  const years = yearIds.length
+    ? (await supabase.from("car_years").select("id, year, model_id").in("id", yearIds)).data ?? []
+    : [];
+
+  const modelIds = Array.from(new Set(years.map((y) => y.model_id).filter(notNull)));
+  const models = modelIds.length
+    ? (await supabase.from("car_models").select("id, name, brand_id").in("id", modelIds)).data ?? []
+    : [];
+
+  const brandIds = Array.from(new Set(models.map((m) => m.brand_id).filter(notNull)));
+  const brands = brandIds.length
+    ? (await supabase.from("car_brands").select("id, name").in("id", brandIds)).data ?? []
+    : [];
+
+  const yearById  = new Map(years.map((y) => [y.id, y]));
+  const modelById = new Map(models.map((m) => [m.id, m]));
+  const brandById = new Map(brands.map((b) => [b.id, b]));
+
+  const priceList: PriceSample[] = priceRows.map((p) => {
+    const y = p.year_id ? yearById.get(p.year_id) : undefined;
+    const m = y?.model_id ? modelById.get(y.model_id) : undefined;
+    const b = m?.brand_id ? brandById.get(m.brand_id) : undefined;
+
+    return {
+      label: [b?.name, m?.name, y?.year].filter(Boolean).join(" ") || "Vehicle",
+      base_price: Number(p.base_price),
+      parts_included: p.parts_included,
+    };
+  });
 
   const minPrice = priceList.length
-    ? Math.min(...priceList.map((p) => Number(p.base_price)))
+    ? Math.min(...priceList.map((p) => p.base_price))
     : null;
 
   return (
@@ -130,11 +157,7 @@ export default async function ServiceDetailPage({ params }: Params) {
                 className="flex items-center justify-between p-3 rounded-lg border bg-card"
               >
                 <div>
-                  <p className="text-sm font-medium">
-                    {p.car_years.car_models.car_brands.name}{" "}
-                    {p.car_years.car_models.name}{" "}
-                    {p.car_years.year}
-                  </p>
+                  <p className="text-sm font-medium">{p.label}</p>
                   {p.parts_included && (
                     <p className="text-xs text-muted-foreground flex items-center gap-1">
                       <CheckCircleIcon className="size-3 text-green-600" />
@@ -142,7 +165,7 @@ export default async function ServiceDetailPage({ params }: Params) {
                     </p>
                   )}
                 </div>
-                <p className="font-bold">${Number(p.base_price).toLocaleString()}</p>
+                <p className="font-bold">${p.base_price.toLocaleString()}</p>
               </div>
             ))}
           </div>

@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useUserCars } from "@/hooks/useCars";
 import { useAuthStore } from "@/stores/auth.store";
+import { carInfo } from "@/lib/carFormat";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import type { UserCarWithDetails } from "@/types";
@@ -32,9 +33,7 @@ export function CarCard({ car }: Props) {
   const { profile }       = useAuthStore();
   const { removeCar, toggleFavorite } = useUserCars(profile?.id ?? null);
 
-  const brand = car.car_years?.car_models?.car_brands;
-  const model = car.car_years?.car_models;
-  const year  = car.car_years;
+  const info = carInfo(car);
 
   const handleRemove = async () => {
     const { error } = await removeCar(car.id);
@@ -96,10 +95,10 @@ export function CarCard({ car }: Props) {
       {/* Car icon + info */}
       <div className="flex items-center gap-4 pt-2">
         <div className="flex items-center justify-center size-14 rounded-xl bg-muted shrink-0">
-          {brand?.logo_url ? (
+          {info.brandLogo ? (
             <img
-              src={brand.logo_url}
-              alt={brand.name}
+              src={info.brandLogo}
+              alt={info.brandName}
               className="size-10 object-contain"
             />
           ) : (
@@ -111,24 +110,25 @@ export function CarCard({ car }: Props) {
           <p className="font-semibold truncate">
             {car.nickname
               ? car.nickname
-              : `${brand?.name ?? ""} ${model?.name ?? ""}`}
+              : `${info.brandName} ${info.modelName}`.trim()}
           </p>
           <p className="text-sm text-muted-foreground">
-            {brand?.name} {model?.name} · {year?.year}
+            {info.brandName} {info.modelName}
+            {info.year ? ` · ${info.year}` : ""}
           </p>
         </div>
       </div>
 
       {/* Specs */}
       <div className="flex flex-wrap gap-2">
-        {year?.engine_config && (
-          <Badge variant="secondary" className="text-xs">{year.engine_config}</Badge>
+        {info.engine && (
+          <Badge variant="secondary" className="text-xs">{info.engine}</Badge>
         )}
-        {year?.transmission && (
-          <Badge variant="outline" className="text-xs capitalize">{year.transmission}</Badge>
+        {info.transmission && (
+          <Badge variant="outline" className="text-xs capitalize">{info.transmission}</Badge>
         )}
-        {year?.fuel_type && (
-          <Badge variant="outline" className="text-xs capitalize">{year.fuel_type}</Badge>
+        {info.fuelType && (
+          <Badge variant="outline" className="text-xs capitalize">{info.fuelType}</Badge>
         )}
         {car.plate && (
           <Badge variant="outline" className="text-xs font-mono">{car.plate}</Badge>

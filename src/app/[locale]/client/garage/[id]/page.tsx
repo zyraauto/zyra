@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import Image from "next/image";
 import { redirect, notFound } from "next/navigation";
 import { getAppointmentsByClient } from "@/lib/supabase/appointments";
+import { carInfo } from "@/lib/carFormat";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,14 +25,19 @@ const STATUS_BADGE: Record<
   AppointmentStatus,
   { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
 > = {
-  pending:     { label: "Pending",     variant: "secondary"   },
-  confirmed:   { label: "Confirmed",   variant: "default"     },
-  in_progress: { label: "In progress", variant: "default"     },
-  completed:   { label: "Completed",   variant: "outline"     },
-  cancelled:   { label: "Cancelled",   variant: "destructive" },
+  scheduled:  { label: "Scheduled",  variant: "secondary"   },
+  confirmed:  { label: "Confirmed",  variant: "default"     },
+  checked_in: { label: "Checked in", variant: "default"     },
+  completed:  { label: "Completed",  variant: "outline"     },
+  no_show:    { label: "No show",    variant: "destructive" },
+  cancelled:  { label: "Cancelled",  variant: "destructive" },
 };
 
 type Params = { params: Promise<{ id: string }> };
+
+// Placa/VIN sin espacios ni guiones, en mayúsculas, para compararlos
+const normalize = (s: string | null | undefined) =>
+  s ? s.replace(/[\s-]/g, "").toUpperCase() : null;
 
 export default async function CarDetailPage({ params }: Params) {
   const { id } = await params;
@@ -45,33 +51,62 @@ export default async function CarDetailPage({ params }: Params) {
     .from("user_cars")
     .select(`
       *,
-      car_years (
+      car_model_years (
         *,
         car_models (*, car_brands (*))
       )
     `)
     .eq("id", id)
     .eq("user_id", user.id)
-    .single();
+    .is("deleted_at", null)
+    .maybeSingle();
 
   if (!car) notFound();
 
-  const typedCar = car as UserCarWithDetails;
-  const brand    = typedCar.car_years?.car_models?.car_brands;
-  const model    = typedCar.car_years?.car_models;
-  const year     = typedCar.car_years;
+  const typedCar = car as unknown as UserCarWithDetails;
+  const info = carInfo(typedCar);
 
-  // Service history for this car
+  // Citas de este auto: se enlazan por placa o VIN con el vehículo del taller
   const allAppointments = (await getAppointmentsByClient(user.id)) ?? [];
-  const carHistory = allAppointments.filter(
-    (a) => a.user_car_id === id && a.status === "completed"
+  const carPlate = normalize(typedCar.plate);
+  const carVin   = normalize(typedCar.vin);
+
+  const carAppointments = allAppointments.filter((a) => {
+    const v = a.customer_vehicles;
+    if (!v) return false;
+    const samePlate = carPlate !== null && normalize(v.plate) === carPlate;
+    const sameVin   = carVin !== null && normalize(v.vin) === carVin;
+    return samePlate || sameVin;
+  });
+
+  const carHistory = carAppointments.filter((a) => a.status === "completed");
+
+  // Gasto: órdenes de trabajo cerradas de esos vehículos
+  const vehicleIds = Array.from(
+    new Set(
+      carAppointments
+        .map((a) => a.vehicle_id)
+        .filter((v): v is string => !!v)
+    )
   );
+
+  let orders: { appointment_id: string | null; total: number | null }[] = [];
+  if (vehicleIds.length > 0) {
+    const { data } = await supabase
+      .from("work_orders")
+      .select("appointment_id, total")
+      .in("vehicle_id", vehicleIds)
+      .in("status", ["completed", "delivered"]);
+    orders = data ?? [];
+  }
+
+  const priceByAppointment = new Map<string, number>();
+  orders.forEach((o) => {
+    if (o.appointment_id) priceByAppointment.set(o.appointment_id, Number(o.total ?? 0));
+  });
 
   const totalServices = carHistory.length;
-  const totalSpent    = carHistory.reduce(
-    (sum, a) => sum + Number(a.final_price ?? 0),
-    0
-  );
+  const totalSpent    = orders.reduce((sum, o) => sum + Number(o.total ?? 0), 0);
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
@@ -84,18 +119,25 @@ export default async function CarDetailPage({ params }: Params) {
 
       <div className="flex items-center gap-4">
         <div className="flex items-center justify-center size-16 rounded-xl bg-muted shrink-0">
-          {brand?.logo_url ? (
-            <Image src={brand.logo_url} alt={brand.name} className="size-12 object-contain" />
+          {info.brandLogo ? (
+            <Image
+              src={info.brandLogo}
+              alt={info.brandName}
+              width={48}
+              height={48}
+              className="size-12 object-contain"
+            />
           ) : (
             <CarIcon className="size-8 text-muted-foreground" />
           )}
         </div>
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
-            {typedCar.nickname ?? `${brand?.name} ${model?.name}`}
+            {typedCar.nickname ?? `${info.brandName} ${info.modelName}`.trim()}
           </h1>
           <p className="text-muted-foreground text-sm">
-            {brand?.name} {model?.name} · {year?.year}
+            {info.brandName} {info.modelName}
+            {info.year ? ` · ${info.year}` : ""}
           </p>
         </div>
       </div>
@@ -106,12 +148,12 @@ export default async function CarDetailPage({ params }: Params) {
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-4">
           {[
-            { label: "Brand",        value: brand?.name },
-            { label: "Model",        value: model?.name },
-            { label: "Year",         value: year?.year },
-            { label: "Engine",       value: year?.engine_config },
-            { label: "Transmission", value: year?.transmission },
-            { label: "Fuel type",    value: year?.fuel_type },
+            { label: "Brand",        value: info.brandName },
+            { label: "Model",        value: info.modelName },
+            { label: "Year",         value: info.year },
+            { label: "Engine",       value: info.engine },
+            { label: "Transmission", value: info.transmission },
+            { label: "Fuel type",    value: info.fuelType },
             { label: "Plate",        value: typedCar.plate },
             { label: "Mileage",      value: typedCar.mileage ? `${typedCar.mileage.toLocaleString()} km` : null },
           ]
@@ -170,8 +212,10 @@ export default async function CarDetailPage({ params }: Params) {
         ) : (
           <div className="flex flex-col gap-3">
             {carHistory.map((apt) => {
-              const status = apt.status ?? "pending";
+              const status = apt.status ?? "scheduled";
               const badge = STATUS_BADGE[status];
+              const price = priceByAppointment.get(apt.id);
+
               return (
                 <Link
                   key={apt.id}
@@ -183,7 +227,7 @@ export default async function CarDetailPage({ params }: Params) {
                       <WrenchIcon className="size-4 text-muted-foreground" />
                     </div>
                     <div className="flex flex-col gap-0.5">
-                      <p className="text-sm font-medium">{apt.services?.name ?? "Service"}</p>
+                      <p className="text-sm font-medium">{apt.service_type ?? "Service"}</p>
                       <p className="text-xs text-muted-foreground">{apt.workshops?.name}</p>
                       {apt.scheduled_at && (
                         <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -191,18 +235,18 @@ export default async function CarDetailPage({ params }: Params) {
                           {format(new Date(apt.scheduled_at), "MMM d, yyyy")}
                         </p>
                       )}
-                      {apt.services?.duration_minutes && (
+                      {apt.estimated_duration_min ? (
                         <p className="text-xs text-muted-foreground flex items-center gap-1">
                           <ClockIcon className="size-3" />
-                          {apt.services.duration_minutes} min
+                          {apt.estimated_duration_min} min
                         </p>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1.5 shrink-0">
                     <Badge variant={badge.variant} className="text-[10px]">{badge.label}</Badge>
-                    {apt.final_price != null && (
-                      <p className="text-sm font-bold">${Number(apt.final_price).toLocaleString()}</p>
+                    {price != null && (
+                      <p className="text-sm font-bold">${price.toLocaleString()}</p>
                     )}
                   </div>
                 </Link>

@@ -9,15 +9,15 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { UserIcon } from "@phosphor-icons/react";
 import type { Tables } from "@/types/database";
 
-type ProfileRow  = Tables<"profiles">;
+type StaffRow    = Tables<"workshop_staff">;
 type WorkshopRow = Tables<"workshops">;
 
 export default function MecanicosPage() {
-  const { profile }                   = useAuthStore();
-  const [mechanics, setMechanics]     = useState<ProfileRow[]>([]);
-  const [countMap,  setCountMap]      = useState<Record<string, number>>({});
-  const [workshop,  setWorkshop]      = useState<WorkshopRow | null>(null);
-  const [isLoading, setIsLoading]     = useState(true);
+  const { profile }               = useAuthStore();
+  const [staff,     setStaff]     = useState<StaffRow[]>([]);
+  const [countMap,  setCountMap]  = useState<Record<string, number>>({});
+  const [workshop,  setWorkshop]  = useState<WorkshopRow | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (!profile?.id) return;
@@ -37,32 +37,32 @@ export default function MecanicosPage() {
       if (!workshops.length) { setIsLoading(false); return; }
 
       const currentWorkshop = workshops[0];
-      // ✅ cast explícito — evita que TS infiera {}
       setWorkshop(currentWorkshop as WorkshopRow);
 
-      // Mechanics
-      const { data: mechData, error: mechError } = await supabase
-        .from("profiles")
+      // Personal activo del taller
+      const { data: staffData, error: staffError } = await supabase
+        .from("workshop_staff")
         .select("*")
-        .eq("role", "mechanic");
+        .eq("workshop_id", currentWorkshop.id)
+        .eq("is_active", true)
+        .order("first_name");
 
-      if (mechError) { console.error(mechError); setIsLoading(false); return; }
+      if (staffError) { console.error(staffError); setIsLoading(false); return; }
 
-      setMechanics((mechData as ProfileRow[]) ?? []);
+      setStaff((staffData as StaffRow[]) ?? []);
 
-      // Appointment count per mechanic
+      // Citas asignadas por persona
       const { data: aptData, error: aptError } = await supabase
         .from("appointments")
-        .select("mechanic_id")
+        .select("staff_id")
         .eq("workshop_id", currentWorkshop.id)
-        .not("mechanic_id", "is", null);
+        .not("staff_id", "is", null);
 
       if (aptError) { console.error(aptError); setIsLoading(false); return; }
 
-      type AptRow = { mechanic_id: string | null };
       const map: Record<string, number> = {};
-      ((aptData as AptRow[]) ?? []).forEach((a) => {
-        if (a.mechanic_id) map[a.mechanic_id] = (map[a.mechanic_id] ?? 0) + 1;
+      (aptData ?? []).forEach((a) => {
+        if (a.staff_id) map[a.staff_id] = (map[a.staff_id] ?? 0) + 1;
       });
 
       setCountMap(map);
@@ -94,17 +94,18 @@ export default function MecanicosPage() {
         </p>
       </div>
 
-      {!mechanics.length ? (
+      {!staff.length ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             <UserIcon className="size-8 mx-auto mb-2 opacity-30" />
-            <p className="text-sm">No mechanics assigned yet.</p>
+            <p className="text-sm">No team members yet.</p>
           </CardContent>
         </Card>
       ) : (
         <div className="grid sm:grid-cols-2 gap-4">
-          {mechanics.map((m) => {
-            const initials = (m.full_name ?? "M")
+          {staff.map((m) => {
+            const fullName = [m.first_name, m.last_name].filter(Boolean).join(" ");
+            const initials = (fullName || "M")
               .split(" ")
               .slice(0, 2)
               .map((n) => n[0])
@@ -120,12 +121,17 @@ export default function MecanicosPage() {
                   </Avatar>
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">
-                      {m.full_name ?? "Mechanic"}
+                      {fullName || "Mechanic"}
                     </p>
                     {m.phone && (
                       <p className="text-xs text-muted-foreground">{m.phone}</p>
                     )}
-                    <div className="flex items-center gap-2 mt-1">
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      {m.role && (
+                        <Badge variant="outline" className="text-[10px] capitalize">
+                          {m.role}
+                        </Badge>
+                      )}
                       <Badge variant="secondary" className="text-[10px]">
                         {countMap[m.id] ?? 0} services
                       </Badge>

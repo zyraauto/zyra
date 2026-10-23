@@ -1,176 +1,318 @@
+
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { Tables } from "@/types/database";
+import type { Tables, TablesInsert } from "@/types/database";
 import type { UserCarWithDetails } from "@/types";
 
 type CarBrand = Tables<"car_brands">;
 type CarModel = Tables<"car_models">;
-type CarYear  = Tables<"car_years">;
-type UserCar  = Tables<"user_cars">;
+type CarModelYear = Tables<"car_model_years">;
 
-// ─── Public catalog ───────────────────────────────────────────────
+// ─── Public catalog ──────────────────────────────────────────────
 
 export function useCarBrands() {
-  const [brands,    setBrands]    = useState<CarBrand[]>([]);
+  const [brands, setBrands] = useState<CarBrand[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     const run = async () => {
-      const supabase = createClient();
-      const { data } = await supabase
-        .from("car_brands")
-        .select("*")
-        .eq("is_active", true)
-        .order("name");
+      setIsLoading(true);
+      setError(null);
 
-      if (cancelled) return;
-      setBrands((data as CarBrand[]) ?? []);
-      setIsLoading(false);
+      try {
+        const supabase = createClient();
+
+        const { data, error: queryError } = await supabase
+          .from("car_brands")
+          .select("*")
+          .eq("is_active", true)
+          .order("name");
+
+        if (cancelled) return;
+
+        if (queryError) {
+          setBrands([]);
+          setError(queryError.message);
+          return;
+        }
+
+        setBrands(data ?? []);
+      } catch (err: unknown) {
+        if (cancelled) return;
+
+        setBrands([]);
+        setError(
+          err instanceof Error
+            ? err.message
+            : "No se pudieron cargar las marcas."
+        );
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
     };
 
-    run();
-    return () => { cancelled = true; };
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  return { brands, isLoading };
+  return { brands, isLoading, error };
 }
 
 export function useCarModels(brandId: string | null) {
-  const [models,    setModels]    = useState<CarModel[]>([]);
+  const [models, setModels] = useState<CarModel[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    // ✅ todo el setState dentro del async
     const run = async () => {
       if (!brandId) {
         setModels([]);
+        setError(null);
+        setIsLoading(false);
         return;
       }
 
       setIsLoading(true);
-      const supabase = createClient();
-      const { data } = await supabase
-        .from("car_models")
-        .select("*")
-        .eq("brand_id", brandId)
-        .order("name");
+      setError(null);
 
-      if (cancelled) return;
-      setModels((data as CarModel[]) ?? []);
-      setIsLoading(false);
+      try {
+        const supabase = createClient();
+
+        const { data, error: queryError } = await supabase
+          .from("car_models")
+          .select("*")
+          .eq("brand_id", brandId)
+          .eq("is_active", true)
+          .order("name");
+
+        if (cancelled) return;
+
+        if (queryError) {
+          setModels([]);
+          setError(queryError.message);
+          return;
+        }
+
+        setModels(data ?? []);
+      } catch (err: unknown) {
+        if (cancelled) return;
+
+        setModels([]);
+        setError(
+          err instanceof Error
+            ? err.message
+            : "No se pudieron cargar los modelos."
+        );
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
     };
 
-    run();
-    return () => { cancelled = true; };
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
   }, [brandId]);
 
-  return { models, isLoading };
+  return { models, isLoading, error };
 }
 
 export function useCarYears(modelId: string | null) {
-  const [years,     setYears]     = useState<CarYear[]>([]);
+  const [years, setYears] = useState<CarModelYear[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    // ✅ todo el setState dentro del async
     const run = async () => {
       if (!modelId) {
         setYears([]);
+        setError(null);
+        setIsLoading(false);
         return;
       }
 
       setIsLoading(true);
-      const supabase = createClient();
-      const { data } = await supabase
-        .from("car_years")
-        .select("*")
-        .eq("model_id", modelId)
-        .order("year", { ascending: false });
+      setError(null);
 
-      if (cancelled) return;
-      setYears((data as CarYear[]) ?? []);
-      setIsLoading(false);
+      try {
+        const supabase = createClient();
+
+        const { data, error: queryError } = await supabase
+          .from("car_model_years")
+          .select("*")
+          .eq("model_id", modelId)
+          .eq("is_active", true)
+          .order("year", { ascending: false })
+          .order("trim_name", { ascending: true });
+
+        if (cancelled) return;
+
+        if (queryError) {
+          setYears([]);
+          setError(queryError.message);
+          return;
+        }
+
+        setYears(data ?? []);
+      } catch (err: unknown) {
+        if (cancelled) return;
+
+        setYears([]);
+        setError(
+          err instanceof Error
+            ? err.message
+            : "No se pudieron cargar los años y versiones."
+        );
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
     };
 
-    run();
-    return () => { cancelled = true; };
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
   }, [modelId]);
 
-  return { years, isLoading };
+  return { years, isLoading, error };
 }
 
-// ─── User garage ──────────────────────────────────────────────────
+// ─── User garage ─────────────────────────────────────────────────
 
 export function useUserCars(userId: string | null) {
-  const [cars,      setCars]      = useState<UserCarWithDetails[]>([]);
+  const [cars, setCars] = useState<UserCarWithDetails[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchCars = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+
     if (!userId) {
       setCars([]);
       setIsLoading(false);
       return;
     }
 
-    const supabase = createClient();
-    const { data } = await supabase
-      .from("user_cars")
-      .select(`
-        *,
-        car_years (
-          *,
-          car_models (
-            *,
-            car_brands (*)
-          )
-        )
-      `)
-      .eq("user_id", userId)
-      .order("is_favorite", { ascending: false });
+    try {
+      const supabase = createClient();
 
-    setCars((data as UserCarWithDetails[]) ?? []);
-    setIsLoading(false);
+      const { data, error: queryError } = await supabase
+        .from("user_cars")
+        .select(`
+          *,
+          car_model_years (
+            *,
+            car_models (
+              *,
+              car_brands (*)
+            )
+          )
+        `)
+        .eq("user_id", userId)
+        .is("deleted_at", null)
+        .order("is_favorite", { ascending: false });
+
+      if (queryError) {
+        setCars([]);
+        setError(queryError.message);
+        console.error("useUserCars:", queryError.message);
+        return;
+      }
+
+      setCars((data as unknown as UserCarWithDetails[]) ?? []);
+    } catch (err: unknown) {
+      setCars([]);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "No se pudieron cargar los vehículos."
+      );
+    } finally {
+      setIsLoading(false);
+    }
   }, [userId]);
 
   useEffect(() => {
-    const run = async () => { await fetchCars(); };
-    run();
+    void fetchCars();
   }, [fetchCars]);
 
-  const addCar = async (payload: Omit<UserCar, "id" | "created_at">) => {
+  const addCar = async (payload: TablesInsert<"user_cars">) => {
     const supabase = createClient();
-    const { error } = await supabase.from("user_cars").insert(payload);
-    if (!error) await fetchCars();
-    return { error };
+
+    const { error: insertError } = await supabase
+      .from("user_cars")
+      .insert(payload);
+
+    if (!insertError) {
+      await fetchCars();
+    }
+
+    return { error: insertError };
   };
 
   const removeCar = async (carId: string) => {
     const supabase = createClient();
-    const { error } = await supabase
+
+    const { error: deleteError } = await supabase
       .from("user_cars")
       .delete()
       .eq("id", carId);
-    if (!error) setCars((prev) => prev.filter((c) => c.id !== carId));
-    return { error };
+
+    if (!deleteError) {
+      setCars((previous) =>
+        previous.filter((car) => car.id !== carId)
+      );
+    }
+
+    return { error: deleteError };
   };
 
-  const toggleFavorite = async (carId: string, current: boolean) => {
+  const toggleFavorite = async (
+    carId: string,
+    current: boolean
+  ) => {
     const supabase = createClient();
-    const { error } = await supabase
+
+    const { error: updateError } = await supabase
       .from("user_cars")
       .update({ is_favorite: !current })
       .eq("id", carId);
-    if (!error) await fetchCars();
-    return { error };
+
+    if (!updateError) {
+      await fetchCars();
+    }
+
+    return { error: updateError };
   };
 
-  return { cars, isLoading, addCar, removeCar, toggleFavorite, refetch: fetchCars };
+  return {
+    cars,
+    isLoading,
+    error,
+    addCar,
+    removeCar,
+    toggleFavorite,
+    refetch: fetchCars,
+  };
 }

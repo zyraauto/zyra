@@ -1,182 +1,140 @@
 import { createClient } from "@/lib/supabase/server";
-import { redirect, notFound } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { notFound, redirect } from "next/navigation";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { ArrowLeftIcon, CarIcon, PlusIcon } from "@phosphor-icons/react/dist/ssr";
+import { ArrowLeftIcon, CarIcon } from "@phosphor-icons/react/dist/ssr";
 import Image from "next/image";
 import Link from "next/link";
 import type { Metadata } from "next";
-import type { CarBrand } from "@/types";
 
-export const metadata: Metadata = { title: "Brand Details" };
+export const metadata: Metadata = { title: "Brand detail" };
 
-type CarYearRow = {
-  id:            string;
-  year:          number;
-  engine_config: string | null;
-  transmission:  string | null;
-  fuel_type:     string | null;
-};
+const LOGO_BUCKET = "logos"; // <-- el mismo nombre que en el listado
 
-type ModelWithYears = {
-  id:        string;
-  name:      string;
-  body_type: string | null;
-  car_years: CarYearRow[];
-};
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type BrandWithModels = CarBrand & { car_models: ModelWithYears[] };
+export default async function AdminBrandDetailPage({
+  params,
+}: {
+  params: Promise<{ brandId: string }>;
+}) {
+  const { brandId } = await params;
 
-type Params = { params: { brandId: string } };
-
-export default async function AdminBrandPage({ params }: Params) {
-  const { brandId } = params;
+  // Evita que rutas como /admin/autos/nueva se traten como un id
+  if (!UUID_RE.test(brandId)) notFound();
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const { data } = await supabase
+  const { data: brand } = await supabase
     .from("car_brands")
-    .select(`
-      *,
-      car_models (
-        id,
-        name,
-        body_type,
-        car_years (
-          id,
-          year,
-          engine_config,
-          transmission,
-          fuel_type
-        )
-      )
-    `)
+    .select("*")
     .eq("id", brandId)
-    .single();
+    .maybeSingle();
 
-  if (!data) notFound();
+  if (!brand) notFound();
 
-  const brand      = data as BrandWithModels;
-  const models     = brand.car_models ?? [];
-  const totalYears = models.reduce((s, m) => s + m.car_years.length, 0);
+  const { data: models } = await supabase
+    .from("car_models")
+    .select("id, name")
+    .eq("brand_id", brandId)
+    .order("name");
+
+  const logoSrc = brand.logo_webp_path
+    ? supabase.storage.from(LOGO_BUCKET).getPublicUrl(brand.logo_webp_path).data.publicUrl
+    : brand.logo_url_fallback;
 
   return (
-    <div className="flex flex-col gap-6 max-w-4xl">
-      {/* Back */}
+    <div className="flex flex-col gap-6 max-w-3xl">
       <Button variant="ghost" size="sm" className="w-fit -ml-2" asChild>
         <Link href="/admin/autos">
-          <ArrowLeftIcon className="size-4" />
-          Back to catalog
+          <ArrowLeftIcon className="size-4 mr-1" />
+          Cars Catalog
         </Link>
       </Button>
 
-      {/* Header */}
       <div className="flex items-center gap-4">
         <div className="flex items-center justify-center size-16 rounded-xl bg-muted shrink-0 overflow-hidden">
-          {brand.logo_url ? (
+          {logoSrc ? (
             <Image
-              src={brand.logo_url}
+              src={logoSrc}
               alt={brand.name}
-              width={48}
-              height={48}
+              width={56}
+              height={56}
               className="object-contain"
             />
           ) : (
             <CarIcon className="size-8 text-muted-foreground" />
           )}
         </div>
-
-        <div className="flex-1">
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold tracking-tight">{brand.name}</h1>
-            <Badge variant={brand.is_active ? "default" : "secondary"}>
-              {brand.is_active ? "Active" : "Inactive"}
-            </Badge>
-          </div>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            {models.length} model{models.length !== 1 ? "s" : ""} ·{" "}
-            {totalYears} year configuration{totalYears !== 1 ? "s" : ""}
-          </p>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl font-bold tracking-tight truncate">{brand.name}</h1>
+          <p className="text-sm text-muted-foreground">{brand.slug}</p>
         </div>
-
-        <Button size="sm" className="shrink-0">
-          <PlusIcon className="size-4" />
-          Add model
-        </Button>
+        <Badge variant={brand.is_active ? "default" : "secondary"}>
+          {brand.is_active ? "Active" : "Off"}
+        </Badge>
       </div>
 
-      {/* Models */}
-      {models.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">
-            <CarIcon className="size-8 mx-auto mb-2 opacity-30" />
-            <p className="text-sm">No models for this brand yet.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {models.map((model) => (
-            <Card key={model.id}>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    {model.name}
-                    {model.body_type && (
-                      <Badge variant="outline" className="text-[10px] capitalize">
-                        {model.body_type}
-                      </Badge>
-                    )}
-                  </CardTitle>
-                  <span className="text-xs text-muted-foreground">
-                    {model.car_years.length} year{model.car_years.length !== 1 ? "s" : ""}
-                  </span>
-                </div>
-              </CardHeader>
+      <Card>
+        <CardContent className="p-4 grid sm:grid-cols-2 gap-4 text-sm">
+          <div>
+            <p className="text-muted-foreground text-xs">Country</p>
+            <p>{brand.country ?? "—"}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs">Vehicle types</p>
+            <p>{brand.vehicle_types?.join(", ") || "—"}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs">Founded</p>
+            <p>{brand.founded_year ?? "—"}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs">Discontinued</p>
+            <p>{brand.discontinued_year ?? "—"}</p>
+          </div>
+          {brand.website_url && (
+            <div className="sm:col-span-2">
+              <p className="text-muted-foreground text-xs">Website</p>
+              <a
+                href={brand.website_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                {brand.website_url}
+              </a>
+            </div>
+          )}
+          {brand.description && (
+            <div className="sm:col-span-2">
+              <p className="text-muted-foreground text-xs">Description</p>
+              <p>{brand.description}</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-              {model.car_years.length > 0 && (
-                <>
-                  <Separator />
-                  <CardContent className="pt-3">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {model.car_years
-                        .sort((a, b) => b.year - a.year)
-                        .map((yr) => (
-                          <div
-                            key={yr.id}
-                            className="flex flex-col gap-1 p-3 rounded-lg bg-muted/50 border"
-                          >
-                            <p className="font-bold text-sm">{yr.year}</p>
-                            <div className="flex flex-wrap gap-1">
-                              {yr.engine_config && (
-                                <Badge variant="secondary" className="text-[10px]">
-                                  {yr.engine_config}
-                                </Badge>
-                              )}
-                              {yr.transmission && (
-                                <Badge variant="outline" className="text-[10px] capitalize">
-                                  {yr.transmission}
-                                </Badge>
-                              )}
-                              {yr.fuel_type && (
-                                <Badge variant="outline" className="text-[10px] capitalize">
-                                  {yr.fuel_type}
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  </CardContent>
-                </>
-              )}
-            </Card>
-          ))}
-        </div>
-      )}
+      <div className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">
+          Models ({models?.length ?? 0})
+        </h2>
+        {models && models.length > 0 ? (
+          <div className="grid sm:grid-cols-2 gap-2">
+            {models.map((m) => (
+              <Card key={m.id}>
+                <CardContent className="p-3 text-sm">{m.name}</CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No models registered.</p>
+        )}
+      </div>
     </div>
   );
 }

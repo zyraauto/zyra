@@ -3,15 +3,29 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { AppointmentWithDetails, AppointmentStatus } from "@/types";
-import type { TablesInsert, Database } from "@/types/database"; // <-- Importar Database
+import type { TablesInsert, Database } from "@/types/database";
 
-// Alias genérico para InsertDto usando Database
-export type InsertDto<TableName extends keyof Database["public"]["Tables"]> = TablesInsert<TableName>;
+export type InsertDto<TableName extends keyof Database["public"]["Tables"]> =
+  TablesInsert<TableName>;
 
-export function useAppointments(
-  userId: string | null,
-  role: "client" | "mechanic" | "workshop_admin" = "client"
-) {
+type Role = "client" | "mechanic" | "workshop_admin";
+
+// "!inner" convierte el join en filtro: solo vuelven las citas cuyo
+// cliente (o mecánico) coincide con el usuario.
+function buildSelect(role: Role) {
+  const customers = role === "client" ? "customers!inner" : "customers";
+  const staff = role === "mechanic" ? "workshop_staff!inner" : "workshop_staff";
+
+  return `
+    *,
+    workshops (id, name, address, phone_wa),
+    customer_vehicles (*),
+    ${customers} (id, user_id, first_name, last_name, phone),
+    ${staff} (id, first_name, last_name)
+  `;
+}
+
+export function useAppointments(userId: string | null, role: Role = "client") {
   const [appointments, setAppointments] = useState<AppointmentWithDetails[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -25,26 +39,16 @@ export function useAppointments(
     const supabase = createClient();
     let query = supabase
       .from("appointments")
-      .select(`
-        *,
-        workshops (id, name, address, phone_wa),
-        services (id, name, category, duration_minutes),
-        user_cars (
-          *,
-          car_years (
-            *,
-            car_models (*, car_brands (*))
-          )
-        ),
-        profiles!appointments_client_id_fkey (id, full_name, phone)
-      `)
+      .select(buildSelect(role))
       .order("scheduled_at", { ascending: false });
 
-    if (role === "client") query = query.eq("client_id", userId);
-    if (role === "mechanic") query = query.eq("mechanic_id", userId);
+    if (role === "client") query = query.eq("customers.user_id", userId);
+    if (role === "mechanic") query = query.eq("workshop_staff.user_id", userId);
 
-    const { data } = await query;
-    setAppointments((data as AppointmentWithDetails[]) ?? []);
+    const { data, error } = await query;
+    if (error) console.error("useAppointments:", error.message);
+
+    setAppointments((data as unknown as AppointmentWithDetails[]) ?? []);
     setIsLoading(false);
   }, [userId, role]);
 
@@ -53,31 +57,27 @@ export function useAppointments(
     run();
   }, [fetchAppointments]);
 
-  // Realtime subscription
+  // Realtime: sin filtro de columna porque la cita ya no guarda el id del
+  // usuario. Supabase solo envía las filas que tus políticas RLS permiten ver.
   useEffect(() => {
     if (!userId) return;
     const supabase = createClient();
-
-    const filter =
-      role === "client" ? `client_id=eq.${userId}` :
-      role === "mechanic" ? `mechanic_id=eq.${userId}` :
-      undefined;
 
     const channel = supabase
       .channel(`appointments:${userId}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "appointments", ...(filter ? { filter } : {}) },
+        { event: "*", schema: "public", table: "appointments" },
         () => fetchAppointments()
       )
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [userId, role, fetchAppointments]);
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId, fetchAppointments]);
 
-  const createAppointment = async (
-    payload: InsertDto<"appointments">
-  ) => {
+  const createAppointment = async (payload: InsertDto<"appointments">) => {
     const supabase = createClient();
     const { data, error } = await supabase
       .from("appointments")
@@ -91,13 +91,21 @@ export function useAppointments(
   const updateStatus = async (
     id: string,
     status: AppointmentStatus,
-    extra?: { mechanic_notes?: string; completed_at?: string }
+    extra?: { notes?: string; cancelled_reason?: string }
   ) => {
     const supabase = createClient();
+    const now = new Date().toISOString();
+
     const { error } = await supabase
       .from("appointments")
-      .update({ status, ...extra })
+      .update({
+        status,
+        ...(status === "confirmed" ? { confirmed_at: now } : {}),
+        ...(status === "cancelled" ? { cancelled_at: now } : {}),
+        ...extra,
+      })
       .eq("id", id);
+
     if (!error) await fetchAppointments();
     return { error };
   };

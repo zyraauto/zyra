@@ -145,7 +145,7 @@ export default async function ClientDashboardPage() {
                   >
                     <div className="flex flex-col gap-0.5">
                       <p className="text-sm font-medium">
-                        {apt.services?.name ?? "Service"}
+                        {apt.service_type ?? "Service"}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {apt.workshops?.name ?? "Workshop"}

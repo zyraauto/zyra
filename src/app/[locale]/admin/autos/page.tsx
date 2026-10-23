@@ -13,6 +13,9 @@ export const metadata: Metadata = { title: "Cars Catalog" };
 
 type BrandWithModels = CarBrand & { car_models: { id: string }[] };
 
+// Bucket de Supabase Storage con las carpetas svg/, webp/ y thumb/
+const LOGO_BUCKET = "logos"; // <-- cámbialo por el nombre real
+
 export default async function AdminAutosPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -24,6 +27,15 @@ export default async function AdminAutosPage() {
     .order("name");
 
   const list = (data ?? []) as BrandWithModels[];
+
+  function brandLogo(brand: CarBrand): string | null {
+    if (brand.logo_webp_path) {
+      return supabase.storage
+        .from(LOGO_BUCKET)
+        .getPublicUrl(brand.logo_webp_path).data.publicUrl;
+    }
+    return brand.logo_url_fallback;
+  }
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
@@ -42,15 +54,15 @@ export default async function AdminAutosPage() {
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {list.map((brand) => {
           const modelCount = brand.car_models?.length ?? 0;
+          const logoSrc = brandLogo(brand);
 
           return (
             <Card key={brand.id}>
               <CardContent className="p-4 flex items-center gap-4">
-                {/* Logo */}
                 <div className="flex items-center justify-center size-12 rounded-xl bg-muted shrink-0 overflow-hidden">
-                  {brand.logo_url ? (
+                  {logoSrc ? (
                     <Image
-                      src={brand.logo_url}
+                      src={logoSrc}
                       alt={brand.name}
                       width={40}
                       height={40}
@@ -61,7 +73,6 @@ export default async function AdminAutosPage() {
                   )}
                 </div>
 
-                {/* Info */}
                 <div className="flex-1 min-w-0">
                   <p className="font-medium truncate">{brand.name}</p>
                   <p className="text-xs text-muted-foreground">
@@ -69,7 +80,6 @@ export default async function AdminAutosPage() {
                   </p>
                 </div>
 
-                {/* Status + action */}
                 <div className="flex flex-col items-end gap-2 shrink-0">
                   <Badge variant={brand.is_active ? "default" : "secondary"}>
                     {brand.is_active ? "Active" : "Off"}
