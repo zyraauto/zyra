@@ -1,9 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import type { Tables } from "@/types/database";
 
-type CarBrand = Tables<"car_brands">;
-type CarModel = Tables<"car_models">;
-type CarYear  = Tables<"car_years">;
+type CarBrand     = Tables<"car_brands">;
+type CarModel     = Tables<"car_models">;
+type CarModelYear = Tables<"car_model_years">;
 
 export async function getBrands(): Promise<CarBrand[]> {
   const supabase = await createClient();
@@ -25,22 +25,24 @@ export async function getModelsByBrand(brandId: string): Promise<CarModel[]> {
   return (data as CarModel[]) ?? [];
 }
 
-export async function getYearsByModel(modelId: string): Promise<CarYear[]> {
+export async function getYearsByModel(modelId: string): Promise<CarModelYear[]> {
   const supabase = await createClient();
   const { data } = await supabase
-    .from("car_years")
+    .from("car_model_years")
     .select("*")
     .eq("model_id", modelId)
-    .order("year", { ascending: false });
-  return (data as CarYear[]) ?? [];
+    .eq("is_active", true)
+    .order("year", { ascending: false })
+    .order("trim_name", { ascending: true });
+  return (data as CarModelYear[]) ?? [];
 }
 
-export async function getYearById(yearId: string): Promise<CarYear | null> {
+export async function getYearById(yearId: string): Promise<CarModelYear | null> {
   const supabase = await createClient();
   const { data } = await supabase
-    .from("car_years")
+    .from("car_model_years")
     .select("*")
     .eq("id", yearId)
-    .single();
-  return (data as CarYear | null) ?? null;
+    .maybeSingle();
+  return (data as CarModelYear | null) ?? null;
 }

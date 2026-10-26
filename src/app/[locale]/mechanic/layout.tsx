@@ -15,7 +15,7 @@ export default async function MechanicLayout({
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user) redirect(`/${locale}/auth/login`);
+  if (!user) redirect(`/${locale}/login`);
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -24,7 +24,7 @@ export default async function MechanicLayout({
     .single();
 
   if (!["mechanic", "super_admin"].includes(profile?.role ?? "")) {
-    redirect(`/${locale}/auth/login?error=unauthorized`);
+    redirect(`/${locale}/login?error=unauthorized`);
   }
 
   return (

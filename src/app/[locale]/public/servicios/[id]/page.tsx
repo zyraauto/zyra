@@ -67,10 +67,15 @@ export default async function ServiceDetailPage({ params }: Params) {
 
   const priceRows = prices ?? [];
 
-  // car_years no tiene relación declarada con car_models: se resuelve por pasos
+  // service_prices.year_id apunta a car_model_years; modelo y marca se resuelven por pasos
   const yearIds = priceRows.map((p) => p.year_id).filter(notNull);
   const years = yearIds.length
-    ? (await supabase.from("car_years").select("id, year, model_id").in("id", yearIds)).data ?? []
+    ? (
+        await supabase
+          .from("car_model_years")
+          .select("id, year, trim_name, model_id")
+          .in("id", yearIds)
+      ).data ?? []
     : [];
 
   const modelIds = Array.from(new Set(years.map((y) => y.model_id).filter(notNull)));
@@ -93,7 +98,7 @@ export default async function ServiceDetailPage({ params }: Params) {
     const b = m?.brand_id ? brandById.get(m.brand_id) : undefined;
 
     return {
-      label: [b?.name, m?.name, y?.year].filter(Boolean).join(" ") || "Vehicle",
+      label: [b?.name, m?.name, y?.year, y?.trim_name].filter(Boolean).join(" ") || "Vehicle",
       base_price: Number(p.base_price),
       parts_included: p.parts_included,
     };

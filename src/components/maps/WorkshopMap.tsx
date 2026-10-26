@@ -5,8 +5,9 @@ import { useGPS } from "@/hooks/useGPS";
 import { Button } from "@/components/ui/button";
 import { NavigationArrowIcon, SpinnerIcon } from "@phosphor-icons/react";
 import type { Tables } from "@/types/database";
+import type { PublicWorkshop } from "@/types";
 
-type Workshop = Tables<"workshops">;
+type Workshop = PublicWorkshop;
 
 type Props = {
   workshops:  Workshop[];

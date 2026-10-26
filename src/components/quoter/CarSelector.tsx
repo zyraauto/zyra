@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { CarIcon, CheckCircleIcon } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
-import type { CarBrand, CarModel, CarYear } from "@/types";
+import type { CarBrand, CarModel, CarModelYear } from "@/types";
 
 // ─── Brand grid ───────────────────────────────────────────────────
 function BrandGrid() {
@@ -153,7 +153,7 @@ function ModelCard({
 // ─── Year list ────────────────────────────────────────────────────
 function YearList() {
   const { model, year: selected, setYear } = useQuoterStore();
-  const { years, isLoading } = useCarYears(model?.id ?? null);
+  const { years, isLoading, error } = useCarYears(model?.id ?? null);
 
   if (isLoading) {
     return (
@@ -162,6 +162,20 @@ function YearList() {
           <Skeleton key={i} className="h-12 rounded-lg" />
         ))}
       </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <p className="text-sm text-destructive text-center py-6">{error}</p>
+    );
+  }
+
+  if (!years.length) {
+    return (
+      <p className="text-sm text-muted-foreground text-center py-6">
+        No years available for this model.
+      </p>
     );
   }
 
@@ -184,9 +198,9 @@ function YearCard({
   isSelected,
   onSelect,
 }: {
-  year: CarYear;
+  year: CarModelYear;
   isSelected: boolean;
-  onSelect: (y: CarYear) => void;
+  onSelect: (y: CarModelYear) => void;
 }) {
   return (
     <button
@@ -200,8 +214,10 @@ function YearCard({
       )}
     >
       <span className="text-sm font-bold">{year.year}</span>
-      {year.engine_config && (
-        <span className="text-[10px] text-muted-foreground">{year.engine_config}</span>
+      {year.trim_name && (
+        <span className="text-[10px] text-muted-foreground text-center">
+          {year.trim_name}
+        </span>
       )}
       {year.transmission && (
         <Badge variant="outline" className="text-[10px] capitalize">

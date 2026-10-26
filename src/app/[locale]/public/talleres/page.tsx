@@ -1,4 +1,4 @@
-import { getWorkshops } from "@/lib/supabase/workshops";
+import { getPublicWorkshops } from "@/lib/supabase/workshops";
 import { WorkshopMap } from "@/components/maps/WorkshopMap";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ export const metadata: Metadata = {
 };
 
 export default async function TalleresPage() {
-  const workshops = await getWorkshops();
+  const workshops = await getPublicWorkshops();
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 flex flex-col gap-8">

@@ -6,19 +6,54 @@ import type { TablesInsert, TablesUpdate } from "@/types/database";
 type AppointmentInsert = TablesInsert<"appointments">;
 type AppointmentUpdate = TablesUpdate<"appointments">;
 
+type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
+type AppointmentRow = Omit<AppointmentWithDetails, "workshops">;
+type WorkshopSummary = NonNullable<AppointmentWithDetails["workshops"]>;
+
 // "!inner" convierte el join en filtro: solo vuelven las citas cuyo
 // cliente (o mecánico) coincide con el usuario que se pide.
+// El taller NO se anida aquí: la tabla workshops no es legible desde el
+// navegador; sus datos públicos se piden aparte con withWorkshops().
 function buildSelect(inner?: "customers" | "workshop_staff") {
   const customers = inner === "customers" ? "customers!inner" : "customers";
   const staff = inner === "workshop_staff" ? "workshop_staff!inner" : "workshop_staff";
 
   return `
     *,
-    workshops (id, name, address, phone_wa),
     customer_vehicles (*),
     ${customers} (id, user_id, first_name, last_name, phone),
     ${staff} (id, first_name, last_name)
   `;
+}
+
+// Une los datos públicos del taller (vista workshops_public) a cada cita.
+async function withWorkshops(
+  supabase: SupabaseServer,
+  rows: AppointmentRow[]
+): Promise<AppointmentWithDetails[]> {
+  const ids = Array.from(
+    new Set(rows.map((r) => r.workshop_id).filter((id): id is string => !!id))
+  );
+
+  if (!ids.length) {
+    return rows.map((r) => ({ ...r, workshops: null }));
+  }
+
+  const { data, error } = await supabase
+    .from("workshops_public")
+    .select("id, name, address, phone_wa")
+    .in("id", ids);
+
+  if (error) console.error("withWorkshops:", error.message);
+
+  const byId = new Map(
+    ((data ?? []) as unknown as WorkshopSummary[]).map((w) => [w.id, w])
+  );
+
+  return rows.map((r) => ({
+    ...r,
+    workshops: r.workshop_id ? byId.get(r.workshop_id) ?? null : null,
+  }));
 }
 
 export async function getAppointmentById(
@@ -35,7 +70,10 @@ export async function getAppointmentById(
     console.error("getAppointmentById:", error.message);
     return null;
   }
-  return (data as unknown as AppointmentWithDetails | null) ?? null;
+  if (!data) return null;
+
+  const [full] = await withWorkshops(supabase, [data as unknown as AppointmentRow]);
+  return full ?? null;
 }
 
 // userId = id del usuario autenticado (customers.user_id)
@@ -50,7 +88,7 @@ export async function getAppointmentsByClient(
     .order("scheduled_at", { ascending: false });
 
   if (error) console.error("getAppointmentsByClient:", error.message);
-  return (data as unknown as AppointmentWithDetails[]) ?? [];
+  return withWorkshops(supabase, (data as unknown as AppointmentRow[]) ?? []);
 }
 
 export async function getAppointmentsByWorkshop(
@@ -72,7 +110,7 @@ export async function getAppointmentsByWorkshop(
 
   const { data, error } = await query;
   if (error) console.error("getAppointmentsByWorkshop:", error.message);
-  return (data as unknown as AppointmentWithDetails[]) ?? [];
+  return withWorkshops(supabase, (data as unknown as AppointmentRow[]) ?? []);
 }
 
 // userId = id del usuario autenticado (workshop_staff.user_id)
@@ -87,7 +125,7 @@ export async function getAppointmentsByMechanic(
     .order("scheduled_at", { ascending: true });
 
   if (error) console.error("getAppointmentsByMechanic:", error.message);
-  return (data as unknown as AppointmentWithDetails[]) ?? [];
+  return withWorkshops(supabase, (data as unknown as AppointmentRow[]) ?? []);
 }
 
 export async function createAppointment(

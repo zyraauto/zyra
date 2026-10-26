@@ -17,7 +17,7 @@ export default async function AdminLayout({
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user) redirect(`/${locale}/auth/login`);
+  if (!user) redirect(`/${locale}/login`);
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -26,7 +26,7 @@ export default async function AdminLayout({
     .single();
 
   if (profile?.role !== "super_admin") {
-    redirect(`/${locale}/auth/login?error=unauthorized`);
+    redirect(`/${locale}/login?error=unauthorized`);
   }
 
   return (

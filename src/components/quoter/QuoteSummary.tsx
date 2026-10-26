@@ -58,12 +58,14 @@ export function QuoteSummary() {
                 Vehicle
               </p>
               <p className="font-medium">
-                {brand?.name} {model?.name} {year?.year}
+                {[brand?.name, model?.name, year?.year, year?.trim_name]
+                  .filter(Boolean)
+                  .join(" ")}
               </p>
-              <div className="flex items-center gap-2 mt-1">
-                {year?.engine_config && (
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                {year?.engine_description && (
                   <Badge variant="outline" className="text-[10px]">
-                    {year.engine_config}
+                    {year.engine_description}
                   </Badge>
                 )}
                 {year?.transmission && (

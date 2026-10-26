@@ -44,3 +44,5 @@ next-env.d.ts
 cpdescarga.txt
 postal_codes.csv
 convert_cp.py
+paquete.txt
+cambios.diff

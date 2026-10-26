@@ -1,4 +1,4 @@
-import { getWorkshopById } from "@/lib/supabase/workshops";
+import { getPublicWorkshopById } from "@/lib/supabase/workshops";
 import { WorkshopMap } from "@/components/maps/WorkshopMap";
 import { WhatsAppFAB } from "@/components/layout/WhatsAppFAB";
 import { Button } from "@/components/ui/button";
@@ -14,13 +14,13 @@ import {
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import type { Workshop, WorkshopSchedule } from "@/types";
+import type { PublicWorkshop, WorkshopSchedule } from "@/types";
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { id } = await params;
-  const workshop = (await getWorkshopById(id)) as Workshop | null;
+  const workshop = (await getPublicWorkshopById(id)) as PublicWorkshop | null;
   return {
     title:       workshop?.name ?? "Workshop",
     description: workshop?.address ?? undefined,
@@ -39,7 +39,7 @@ const DAY_LABELS: Record<string, string> = {
 
 export default async function WorkshopPublicPage({ params }: Params) {
   const { id } = await params;
-  const workshop = (await getWorkshopById(id)) as Workshop | null;
+  const workshop = (await getPublicWorkshopById(id)) as PublicWorkshop | null;
   if (!workshop) notFound();
 
   const rating = workshop.rating ?? 0;
