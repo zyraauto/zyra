@@ -5,21 +5,22 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { format } from "date-fns";
 import type { Metadata } from "next";
-import type { Profile, UserRole } from "@/types";
+import type { Profile } from "@/types";
 
 export const metadata: Metadata = { title: "Users" };
 
 const ROLE_BADGE: Record<
-  UserRole,
+  string,
   { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
 > = {
-  super_admin:    { label: "Super Admin",    variant: "destructive" },
-  workshop_admin: { label: "Workshop Admin", variant: "default"     },
-  mechanic:       { label: "Mechanic",       variant: "secondary"   },
-  client:         { label: "Client",         variant: "outline"     },
-  supplier:       { label: "Supplier",       variant: "secondary"   },
-  visitor:        { label: "Visitor",        variant: "outline"     },
+  super_admin: { label: "Super Admin", variant: "destructive" },
+  workshop:    { label: "Taller",      variant: "default"     },
+  owner:       { label: "Taller",      variant: "default"     },
+  admin:       { label: "Admin",       variant: "default"     },
+  client:      { label: "Cliente",     variant: "outline"     },
 };
+
+const FALLBACK_BADGE = { label: "Otro", variant: "outline" as const };
 
 export default async function AdminUsuariosPage() {
   const supabase = await createClient();
@@ -44,12 +45,12 @@ export default async function AdminUsuariosPage() {
   const list = (data ?? []) as Profile[];
 
   // 📊 Role counts tipado
-  const roleCounts = list.reduce<Record<UserRole, number>>(
+  const roleCounts = list.reduce<Record<string, number>>(
     (acc, p) => {
       acc[p.role] = (acc[p.role] ?? 0) + 1;
       return acc;
     },
-    {} as Record<UserRole, number>
+    {} as Record<string, number>
   );
 
   return (
@@ -66,7 +67,7 @@ export default async function AdminUsuariosPage() {
       {/* Role summary */}
       <div className="flex flex-wrap gap-2">
         {Object.entries(roleCounts).map(([role, count]) => {
-          const cfg = ROLE_BADGE[role as UserRole];
+          const cfg = ROLE_BADGE[role as string] ?? FALLBACK_BADGE; 
 
           return (
             <Badge key={role} variant={cfg?.variant ?? "outline"}>
@@ -79,7 +80,7 @@ export default async function AdminUsuariosPage() {
       {/* User list */}
       <div className="flex flex-col gap-3">
         {list.map((profile) => {
-          const badge = ROLE_BADGE[profile.role];
+          const badge = ROLE_BADGE[profile.role] ?? FALLBACK_BADGE;
 
           const initials = (profile.full_name ?? "U")
             .split(" ")

@@ -31,7 +31,7 @@ export function Navbar() {
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 font-bold text-lg">
           <CarIcon weight="fill" className="size-6 text-primary" />
-          <span>AutoService Pro</span>
+          <span>Zyra AutoService</span>
         </Link>
 
         {/* Desktop nav */}

@@ -3,10 +3,13 @@ import { createClient } from '@/lib/supabase/server';
 
 const DEFAULT_NEXT = '/workshop/dashboard';
 const ONBOARDING_PATH = '/es/onboarding';
+const ADMIN_HOME = '/es/admin/dashboard';
 const LOGIN_ERROR_PATH = '/es/login?error=auth_failed';
 
 // /es/reset-password, /en/reset-password?x=1, etc.
 const RECOVERY_PATH = /^\/[^/]+\/reset-password\/?(\?|#|$)/;
+// /admin/..., /es/admin/..., /en/admin/...
+const ADMIN_PATH = /^\/([a-z]{2}\/)?admin(\/|$)/;
 
 /**
  * Solo acepta rutas internas. Rechaza "//evil.com", "/\evil.com", "https://evil.com", etc.
@@ -51,10 +54,18 @@ export async function GET(request: NextRequest) {
 
   const tenantId = user.app_metadata?.tenant_id;
   const isRecovery = RECOVERY_PATH.test(next);
+  const isSuperAdmin = user.app_metadata?.role === 'super_admin';
 
   // Con taller -> destino solicitado. Recuperación -> siempre a cambiar contraseña, tenga taller o no.
   if (tenantId || isRecovery) {
     return NextResponse.redirect(`${origin}${next}`);
+  }
+
+  // Super admin: es de plataforma y no necesita taller.
+  // Si venía de una página de admin, vuelve a ella; si no, al panel.
+  if (isSuperAdmin) {
+    const target = ADMIN_PATH.test(next) ? next : ADMIN_HOME;
+    return NextResponse.redirect(`${origin}${target}`);
   }
 
   // Usuario nuevo sin taller -> registro del taller.

@@ -6,8 +6,8 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: {
-    template: "%s | AutoService Pro",
-    default:  "AutoService Pro",
+    template: "%s | Zyra AutoService",
+    default:  "Zyra AutoService",
   },
   description: "Tu taller de confianza, siempre cerca",
   manifest:    "/icons/manifest.json",

@@ -14,7 +14,7 @@ export default function ConfiguracionWireframe() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-600 mb-1">Nombre del Taller</label>
-              <input type="text" defaultValue="AutoServicio Pro" className="w-full border border-slate-300 rounded-lg p-2 text-sm" />
+              <input type="text" defaultValue="Zyra AutoService" className="w-full border border-slate-300 rounded-lg p-2 text-sm" />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-600 mb-1">Teléfono (WhatsApp)</label>
