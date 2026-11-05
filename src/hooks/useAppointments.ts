@@ -18,7 +18,7 @@ function buildSelect(role: Role) {
 
   return `
     *,
-    workshops (id, name, address, phone_wa),
+     workshops:workshops_public (id, name, address, phone_wa),
     customer_vehicles (*),
     ${customers} (id, user_id, first_name, last_name, phone),
     ${staff} (id, first_name, last_name)
