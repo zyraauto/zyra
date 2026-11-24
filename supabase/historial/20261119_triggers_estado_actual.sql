@@ -91,3 +91,5 @@ CREATE TRIGGER workshop_staff_updated_at BEFORE UPDATE ON public.workshop_staff 
 CREATE TRIGGER on_workshop_created AFTER INSERT ON public.workshops FOR EACH ROW EXECUTE FUNCTION handle_new_workshop();
 
 CREATE TRIGGER workshops_updated_at BEFORE UPDATE ON public.workshops FOR EACH ROW EXECUTE FUNCTION handle_updated_at();
+-- Trigger sobre auth.users (esquema auth, fuera del filtro 'public' de la exportacion). Agregado desde consulta del 23-nov-2026.
+CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION handle_new_user();
