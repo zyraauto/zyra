@@ -2,12 +2,14 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
 const DEFAULT_NEXT = '/workshop/dashboard';
-const ONBOARDING_PATH = '/es/onboarding';
+const CLIENT_HOME = '/es/client/dashboard';
 const ADMIN_HOME = '/es/admin/dashboard';
 const LOGIN_ERROR_PATH = '/es/login?error=auth_failed';
 
 // /es/reset-password, /en/reset-password?x=1, etc.
 const RECOVERY_PATH = /^\/[^/]+\/reset-password\/?(\?|#|$)/;
+// /es/onboarding, /en/onboarding, etc. (el dueño que viene a registrar su taller)
+const ONBOARDING_PATH = /^\/[^/]+\/onboarding\/?(\?|#|$)/;
 // /admin/..., /es/admin/..., /en/admin/...
 const ADMIN_PATH = /^\/([a-z]{2}\/)?admin(\/|$)/;
 
@@ -68,6 +70,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${origin}${target}`);
   }
 
-  // Usuario nuevo sin taller -> registro del taller.
-  return NextResponse.redirect(`${origin}${ONBOARDING_PATH}`);
+  // Sin taller y con la intención explícita de registrar uno (venía de "Registra tu taller").
+  if (ONBOARDING_PATH.test(next)) {
+    return NextResponse.redirect(`${origin}${next}`);
+  }
+
+  // Sin taller y sin esa intención: es un cliente. Va a su portal, no al onboarding.
+  return NextResponse.redirect(`${origin}${CLIENT_HOME}`);
 }

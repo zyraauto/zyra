@@ -501,11 +501,22 @@ export default function ZyraLogin() {
     setLoading(true);
     setError('');
 
+    // Si el proxy nos mandó aquí con ?next=/es/onboarding, esa intención viaja a Google
+    // y vuelve al callback. Solo se acepta una ruta interna (misma regla que el callback).
+    const rawNext = new URLSearchParams(window.location.search).get('next');
+    const safeNext =
+      rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//') && !rawNext.includes('\\')
+        ? rawNext
+        : null;
+    const callbackUrl = safeNext
+      ? `${window.location.origin}/auth/callback?next=${encodeURIComponent(safeNext)}`
+      : `${window.location.origin}/auth/callback`;
+
     try {
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: callbackUrl,
         },
       });
 
