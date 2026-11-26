@@ -30,7 +30,7 @@ function buildCsp(nonce: string) {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ''}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: blob: https://res.cloudinary.com",
+    "img-src 'self' data: blob: https://res.cloudinary.com https://lh3.googleusercontent.com",
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src 'self' ${supa} ${supa.replace(/^http/, 'ws')}`,
     "frame-ancestors 'none'",
